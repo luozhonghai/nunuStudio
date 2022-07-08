@@ -4,10 +4,14 @@ import {RoundedBoxBufferGeometry} from "../geometries/RoundedBoxBufferGeometry.j
 import {CapsuleBufferGeometry} from "../geometries/CapsuleBufferGeometry.js";
 import {ParametricBufferGeometry} from "../geometries/ParametricBufferGeometry.js";
 import {LegacyGeometryLoader} from "./LegacyGeometryLoader.js";
+import {StaticPair} from "@as-com/pson";
+import {Locale} from "../../editor/locale/LocaleManager";
+import {Editor} from "../../editor/Editor";
+import {FileSystem} from "../FileSystem";
 
 /**
  * Geometry loader can be used to load geometry files.
- * 
+ *
  * @class GeometryLoader
  * @module Loaders
  * @param {Object} manager
@@ -74,7 +78,7 @@ GeometryLoader.prototype.load = function(url, onLoad, onProgress, onError)
 GeometryLoader.prototype.parse = function(data)
 {
 	var geometry = null;
-	
+
 	if (data.type === "CapsuleBufferGeometry")
 	{
 		geometry = new CapsuleBufferGeometry(data.radiusTop, data.radiusBottom, data.height, data.radialSegments, data.heightSegments, data.capsTopSegments, data.capsBottomSegments, data.thetaStart, data.thetaLength);
@@ -96,7 +100,12 @@ GeometryLoader.prototype.parse = function(data)
 		var loader = new LegacyGeometryLoader();
 		geometry = loader.parse(data.data).geometry;
 	}
-
+	else if (data.format === "chunk")
+	{
+		var chunkData = JSON.parse(FileSystem.readFile(data.path, true));
+		geometry = this.parseChunk(chunkData);
+		return geometry;
+	}
 	else
 	{
 		var geometries = ObjectLoader.prototype.parseGeometries([data], this.shapes);
@@ -113,4 +122,44 @@ GeometryLoader.prototype.parse = function(data)
 	return geometry;
 };
 
+GeometryLoader.prototype.parseChunk = function (data)
+{
+	var geometry = null;
+
+	if (data.type === "CapsuleBufferGeometry")
+	{
+		geometry = new CapsuleBufferGeometry(data.radiusTop, data.radiusBottom, data.height, data.radialSegments, data.heightSegments, data.capsTopSegments, data.capsBottomSegments, data.thetaStart, data.thetaLength);
+	}
+	else if (data.type === "RoundedBoxBufferGeometry")
+	{
+		geometry = new RoundedBoxBufferGeometry(data.width, data.height, data.depth, data.radius, data.radiusSegments);
+	}
+	else if (data.type === "TerrainBufferGeometry")
+	{
+		geometry = new TerrainBufferGeometry(data.width, data.height, data.widthSegments, data.heightSegments, data.scale, this.images[data.image]);
+	}
+	else if (data.type === "ParametricBufferGeometry")
+	{
+		geometry = new ParametricBufferGeometry(data.code, data.slices, data.stacks);
+	}
+	else if (data.type === "Geometry")
+	{
+		var loader = new LegacyGeometryLoader();
+		geometry = loader.parse(data.data).geometry;
+	}
+	else
+	{
+		var geometries = ObjectLoader.prototype.parseGeometries([data], this.shapes);
+		for (var i in geometries)
+		{
+			geometry = geometries[i];
+			break;
+		}
+	}
+
+	geometry.uuid = data.uuid;
+	geometry.name = data.name !== undefined ? data.name : "geometry";
+
+	return geometry;
+};
 export {GeometryLoader};

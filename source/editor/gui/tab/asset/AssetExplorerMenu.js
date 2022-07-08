@@ -22,7 +22,7 @@ function AssetExplorerMenu(parent)
 
 	this.element.style.backgroundColor = "var(--bar-color)";
 	this.element.style.overflow = "visible";
-	
+
 	// Import
 	var menu = new DropdownMenu(this);
 	menu.setText(Locale.import);
@@ -33,7 +33,7 @@ function AssetExplorerMenu(parent)
 	menu.addOption(Locale.models3D, function()
 	{
 		FileSystem.chooseFile(function(files)
-		{	
+		{
 			for (var i = 0; i < files.length; i++)
 			{
 				Loaders.loadModel(files[i]);
@@ -76,7 +76,7 @@ function AssetExplorerMenu(parent)
 			}
 		}, "audio/*");
 	}, Global.FILE_PATH + "icons/misc/audio.png");
-	
+
 	// Spine Animation
 	if (Nunu.runningOnDesktop())
 	{
@@ -181,7 +181,7 @@ function AssetExplorerMenu(parent)
 	material.setText(Locale.material);
 	material.size.set(100, 25);
 	material.position.set(200, 0);
-	
+
 	material.addOption(Locale.standardMaterial, function()
 	{
 		var material = new MeshStandardMaterial();
@@ -202,7 +202,7 @@ function AssetExplorerMenu(parent)
 		material.name = "phong";
 		Editor.addAction(new AddResourceAction(material, Editor.program, "materials"));
 	}, Global.FILE_PATH + "icons/misc/material.png");
-	
+
 	material.addOption(Locale.basicMaterial, function()
 	{
 		var material = new MeshBasicMaterial();
@@ -286,7 +286,7 @@ function AssetExplorerMenu(parent)
 		material.name = "normal";
 		Editor.addAction(new AddResourceAction(material, Editor.program, "materials"));
 	}, Global.FILE_PATH + "icons/misc/material.png");
-	
+
 	others.addOption(Locale.depthMaterial, function()
 	{
 		var material = new MeshDepthMaterial();
@@ -315,7 +315,7 @@ function AssetExplorerMenu(parent)
 	create.setText(Locale.code);
 	create.size.set(100, 25);
 	create.position.set(300, 0);
-	
+
 	create.addOption(Locale.html, function()
 	{
 		var resource = new TextFile("<!DOCTYPE html>\n<html>\n<head>\n\t<title></title>\n</head>\n<body>\n\n</body>\n</html>", "html");
@@ -331,6 +331,57 @@ function AssetExplorerMenu(parent)
 	}, Global.FILE_PATH + "icons/script/script.png");
 
 	create.updateInterface();
+
+	var filter = new DropdownMenu(this);
+	//filter.setMode(Component.TOP_RIGHT);
+	filter.setText("Filter");
+	filter.size.set(100, 25);
+	filter.position.set(400, 0);
+	filter.addOption("All", function()
+	{
+		parent.filterByName("");
+	});
+	filter.addOption(Locale.material, function()
+	{
+		parent.filterByType("material");
+	});
+
+	filter.addOption(Locale.geometry, function()
+	{
+		parent.filterByType("geometry");
+	});
+
+	filter.addOption(Locale.audio, function()
+	{
+		parent.filterByType("audio");
+	});
+
+	filter.addOption(Locale.font, function()
+	{
+		parent.filterByType("font");
+	});
+
+	filter.addOption(Locale.texture, function()
+	{
+		parent.filterByType("texture");
+	});
+
+	filter.addOption(Locale.image, function()
+	{
+		parent.filterByType("image");
+	});
+
+	filter.addOption(Locale.video, function()
+	{
+		parent.filterByType("video");
+	});
+
+	filter.addOption(Locale.code, function()
+	{
+		parent.filterByType("file");
+	});
+
+	filter.updateInterface();
 }
 
 AssetExplorerMenu.prototype = Object.create(Component.prototype);

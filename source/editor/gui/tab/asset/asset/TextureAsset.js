@@ -30,6 +30,7 @@ function TextureAsset(parent)
 	this.setIcon(Global.FILE_PATH + "icons/misc/texture.png");
 
 	var self = this;
+	this.meta = "texture";
 
 	this.element.ondblclick = function()
 	{
@@ -53,7 +54,7 @@ function TextureAsset(parent)
 		}
 
 		var tab = Editor.gui.tab.getTab(Constructor, self.asset);
-		
+
 		if (tab === null)
 		{
 			tab = Editor.gui.tab.addTab(Constructor, true);
@@ -69,7 +70,7 @@ function TextureAsset(parent)
 		var context = new ContextMenu(DocumentBody);
 		context.size.set(130, 20);
 		context.position.set(event.clientX, event.clientY);
-		
+
 		context.addOption(Locale.rename, function()
 		{
 			if (self.asset !== null)
@@ -77,7 +78,7 @@ function TextureAsset(parent)
 				Editor.addAction(new ChangeAction(self.asset, "name", Editor.prompt(Locale.renameTexture, self.asset.name)));
 			}
 		});
-		
+
 		context.addOption(Locale.delete, function()
 		{
 			if (self.asset !== null && Editor.confirm(Locale.deleteTexture))
@@ -94,7 +95,7 @@ function TextureAsset(parent)
 				Editor.clipboard.set(JSON.stringify(self.asset.toJSON()), "text");
 			}
 		});
-		
+
 		context.addOption(Locale.cut, function()
 		{
 			if (self.asset !== null)
@@ -127,10 +128,10 @@ function TextureAsset(parent)
 				loader.setVideos(videos);
 
 				// Load
-				var texture = loader.parse(json); 
+				var texture = loader.parse(json);
 				texture.uuid = Math.generateUUID();
 				texture.name += "*";
-				
+
 				Editor.addAction(new AddResourceAction(texture, Editor.program, "textures"));
 			}
 			catch (e)
@@ -175,7 +176,7 @@ TextureAsset.prototype.attach = function(asset)
 		this.preview.style.left = "17%";
 		this.preview.style.width = "66%";
 		this.preview.style.height = "66%";
-		this.element.appendChild(this.preview);	
+		this.element.appendChild(this.preview);
 	}
 };
 export {TextureAsset};

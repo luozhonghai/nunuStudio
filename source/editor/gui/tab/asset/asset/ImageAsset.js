@@ -28,6 +28,7 @@ function ImageAsset(parent)
 	this.setIcon(Global.FILE_PATH + "icons/misc/image.png");
 
 	var self = this;
+	this.meta = "image";
 
 	// Context menu event
 	this.element.oncontextmenu = function(event)
@@ -35,7 +36,7 @@ function ImageAsset(parent)
 		var context = new ContextMenu(DocumentBody);
 		context.size.set(130, 20);
 		context.position.set(event.clientX, event.clientY);
-		
+
 		context.addOption(Locale.rename, function()
 		{
 			if (self.asset !== null)
@@ -43,7 +44,7 @@ function ImageAsset(parent)
 				Editor.addAction(new ChangeAction(self.asset, "name", Editor.prompt(Locale.rename + " " + Locale.image, self.asset.name)));
 			}
 		});
-		
+
 		context.addOption(Locale.delete, function()
 		{
 			if (Editor.confirm(Locale.delete + " " + Locale.image))

@@ -15,8 +15,9 @@ function FontAsset(parent)
 	Asset.call(this, parent);
 
 	this.setIcon(Global.FILE_PATH + "icons/misc/font.png");
-	
+
 	var self = this;
+	this.meta = "font";
 
 	// Image
 	this.image = document.createElement("img");
@@ -33,12 +34,12 @@ function FontAsset(parent)
 		var context = new ContextMenu(DocumentBody);
 		context.size.set(130, 20);
 		context.position.set(event.clientX, event.clientY);
-		
+
 		context.addOption(Locale.rename, function()
 		{
 			Editor.addAction(new ChangeAction(self.asset, "name", Editor.prompt(Locale.renameFont, self.asset.name)));
 		});
-		
+
 		context.addOption(Locale.delete, function()
 		{
 			Editor.addAction(new RemoveResourceAction(self.asset, Editor.program, "fonts"));
@@ -60,7 +61,7 @@ function FontAsset(parent)
 		{
 			Editor.clipboard.set(JSON.stringify(self.asset.toJSON()), "text");
 		});
-		
+
 		context.addOption(Locale.cut, function()
 		{
 			Editor.clipboard.set(JSON.stringify(self.asset.toJSON()), "text");
@@ -93,7 +94,7 @@ FontAsset.prototype = Object.create(Asset.prototype);
 FontAsset.prototype.updateMetadata = function()
 {
 	var image = this.image;
-	
+
 	FontRenderer.render(this.asset, function(url)
 	{
 		image.src = url;

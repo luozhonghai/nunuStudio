@@ -1,4 +1,5 @@
 import {DefaultLoadingManager, MaterialLoader as TMaterialLoader} from "three";
+import {FileSystem} from "../FileSystem";
 
 /**
  * MaterialLoader can be used to load external materials.

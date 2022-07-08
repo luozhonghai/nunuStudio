@@ -15,8 +15,9 @@ function FileAsset(parent)
 	Asset.call(this, parent);
 
 	this.setIcon(Global.FILE_PATH + "icons/misc/file.png");
-	
+
 	var self = this;
+	this.meta = "file";
 
 	// Image
 	this.image = document.createElement("img");
@@ -38,7 +39,7 @@ function FileAsset(parent)
 		{
 			Editor.addAction(new ChangeAction(self.asset, "name", Editor.prompt(Locale.rename + " " + Locale.file, self.asset.name)));
 		});
-		
+
 		context.addOption(Locale.delete, function()
 		{
 			if (Editor.confirm(Locale.delete + " " + Locale.file))
@@ -72,7 +73,7 @@ function FileAsset(parent)
 		{
 			Editor.clipboard.set(JSON.stringify(self.asset.toJSON()), "text");
 		});
-		
+
 		context.addOption(Locale.cut, function()
 		{
 			Editor.clipboard.set(JSON.stringify(self.asset.toJSON()), "text");
@@ -93,7 +94,7 @@ function FileAsset(parent)
 			tab = Editor.gui.tab.addTab(TextEditor, true);
 			tab.attach(self.asset, self);
 		}
-		
+
 		tab.select();
 	};
 }

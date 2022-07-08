@@ -981,12 +981,16 @@ Editor.saveProgramPath = function(path)
 					path: fname
 				});
 
-				FileSystem.writeFileArrayBuffer(fname, pson.toArrayBuffer(resources[j]));
+				//FileSystem.writeFileArrayBuffer(fname, pson.toArrayBuffer(resources[j]));
+				var json = JSON.stringify(resources[j], null, "\t");
+				FileSystem.writeFile(fname, json);
 			}
 		}
 	}
 
-	FileSystem.writeFileArrayBuffer(path + "\\app.nsp", pson.toArrayBuffer(data));
+	//FileSystem.writeFileArrayBuffer(path + "\\app.nsp", pson.toArrayBuffer(data));
+	var json = JSON.stringify(data, null, "\t");
+	FileSystem.writeFile(path + "\\app.isp", json);
 };
 
 /**

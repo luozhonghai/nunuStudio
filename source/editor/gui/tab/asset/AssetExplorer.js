@@ -9,6 +9,7 @@ import {Editor} from "../../../Editor.js";
 import {TabComponent} from "../../../components/tabs/TabComponent.js";
 import {SearchBox} from "../../../components/SearchBox.js";
 import {Component} from "../../../components/Component.js";
+import {ButtonText} from "../../../components/buttons/ButtonText";
 import {AssetExplorerMenu} from "./AssetExplorerMenu.js";
 import {VideoAsset} from "./asset/VideoAsset.js";
 import {TextureAsset} from "./asset/TextureAsset.js";
@@ -19,6 +20,9 @@ import {FontAsset} from "./asset/FontAsset.js";
 import {FileAsset} from "./asset/FileAsset.js";
 import {AudioAsset} from "./asset/AudioAsset.js";
 import {Asset} from "./asset/Asset.js";
+import {DropdownMenu} from "../../../components/dropdown/DropdownMenu";
+import {Locale} from "../../../locale/LocaleManager";
+import {FileSystem} from "../../../../core/FileSystem";
 
 function AssetExplorer(parent, closeable, container, index)
 {
@@ -82,6 +86,20 @@ function AssetExplorer(parent, closeable, container, index)
 		self.filterByName(self.search.search.getText());
 	});
 
+	// About
+	// this.about = new ButtonText(this.bar);
+	// this.about.setMode(Component.TOP_RIGHT);
+	// this.about.setText("geometry");
+	// this.about.size.set(100, 25);
+	// this.about.position.set(210, 0);
+	// this.about.updateInterface();
+	// this.about.setOnClick(function()
+	// {
+	// 	self.filterByName("box");
+	// 	console.log("on click about asset explorer");
+	// });
+
+
 	/**
 	 * Assets in explorer.
 	 *
@@ -120,6 +138,17 @@ AssetExplorer.prototype.filterByName = function(search)
 	}
 };
 
+AssetExplorer.prototype.filterByType = function(search)
+{
+	search = search.toLowerCase();
+
+	for (var i = 0; i < this.files.length; i++)
+	{
+		var text = this.files[i].meta.toLowerCase();
+		this.files[i].setVisibility(text.search(search) !== -1);
+	}
+};
+
 AssetExplorer.prototype.updateSettings = function()
 {
 	for (var i = 0; i < this.files.length; i++)
@@ -137,13 +166,13 @@ AssetExplorer.prototype.updateSettings = function()
 AssetExplorer.prototype.attach = function(manager)
 {
 	if (this.manager !== manager)
-	{	
+	{
 		this.manager = manager;
 		this.updateObjectsView();
 	}
 };
 
-/** 
+/**
  * Add asset to the explorer.
  *
  * @method add
@@ -241,7 +270,7 @@ AssetExplorer.prototype.updateObjectsView = function()
 	}
 };
 
-/** 
+/**
  * Clear the explorer, remove all assets.
  *
  * @method clear

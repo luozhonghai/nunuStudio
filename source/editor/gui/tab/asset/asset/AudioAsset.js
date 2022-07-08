@@ -18,8 +18,9 @@ function AudioAsset(parent)
 	Asset.call(this, parent);
 
 	this.setIcon(Global.FILE_PATH + "icons/misc/audio.png");
-	
+
 	var self = this;
+	this.meta = "audio";
 
 	// Image
 	this.image = document.createElement("img");
@@ -37,7 +38,7 @@ function AudioAsset(parent)
 		var context = new ContextMenu(DocumentBody);
 		context.size.set(130, 20);
 		context.position.set(event.clientX, event.clientY);
-		
+
 		var menu = context.addMenu("Create Emitter");
 
 		menu.addOption("Audio Emitter", function()
@@ -85,7 +86,7 @@ function AudioAsset(parent)
 				}, "." + self.asset.encoding);
 			}
 		});
-		
+
 		context.addOption(Locale.delete, function()
 		{
 			if (Editor.confirm("Delete audio?"))

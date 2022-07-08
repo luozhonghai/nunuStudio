@@ -61,8 +61,6 @@ function Asset(parent)
 	this.name = document.createTextNode("");
 	this.text.appendChild(this.name);
 
-	var self = this;
-
 	this.element.onmouseenter = function()
 	{
 		this.style.backgroundColor = "var(--button-over-color)";
@@ -133,7 +131,7 @@ Asset.prototype.attach = function(asset)
 {
 	this.asset = asset;
 	this.asset.gui = {node: this};
-	
+
 	this.updateMetadata();
 };
 

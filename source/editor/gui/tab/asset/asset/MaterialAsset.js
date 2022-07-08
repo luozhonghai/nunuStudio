@@ -31,8 +31,10 @@ function MaterialAsset(parent)
 	Asset.call(this, parent);
 
 	this.setIcon(Global.FILE_PATH + "icons/misc/material.png");
-	
+
 	var self = this;
+
+	this.meta = "material";
 
 	// Use to store original material color on highlight
 	this.materialColor = new Color(0, 0, 0);
@@ -141,14 +143,14 @@ function MaterialAsset(parent)
 		var context = new ContextMenu(DocumentBody);
 		context.size.set(130, 20);
 		context.position.set(event.clientX, event.clientY);
-		
+
 		context.addOption(Locale.rename, function()
 		{
 			Editor.addAction(new ChangeAction(self.asset, "name", Editor.prompt(Locale.renameMaterial, self.asset.name)));
 		});
-		
+
 		context.addOption(Locale.selectObjects, function()
-		{	
+		{
 			Editor.clearSelection();
 			Editor.program.traverse(function(child)
 			{
@@ -192,10 +194,10 @@ function MaterialAsset(parent)
 				loader.setTextures(Editor.program.textures);
 
 				// Load
-				var material = loader.parse(json); 
+				var material = loader.parse(json);
 				material.uuid = Math.generateUUID();
 				material.name += "*";
-				
+
 				Editor.addAction(new AddResourceAction(material, Editor.program, "materials"));
 			}
 			catch (e)
@@ -268,12 +270,12 @@ MaterialAsset.prototype.updateMetadata = function()
 	if (this.asset !== null)
 	{
 		var image = this.image;
-		
+
 		MaterialRenderer.render(this.asset, function(url)
 		{
 			image.src = url;
 		});
-		
+
 		this.setText(this.asset.name);
 	}
 };

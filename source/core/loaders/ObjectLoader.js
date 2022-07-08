@@ -42,6 +42,7 @@ import {AudioLoader} from "./AudioLoader.js";
 import {TextureLoader} from "./TextureLoader.js";
 import {VideoLoader} from "./VideoLoader.js";
 import {BillboardGroup} from "../objects/misc/BillboardGroup";
+import {FileSystem} from "../FileSystem";
 
 /**
  * Objectloader can be used to load external objects from files.
@@ -239,7 +240,17 @@ ObjectLoader.prototype.parseMaterials = function(json)
 
 		for (var i in json)
 		{
-			this.materials[json[i].uuid] = loader.parse(json[i]);
+			console.log("json[i].format: " + json[i].format);
+			if (json[i].format === "chunk")
+			{
+				var chunkData = JSON.parse(FileSystem.readFile(json[i].path, true));
+				this.materials[json[i].uuid] = loader.parse(chunkData);
+			}
+			else
+			{
+				this.materials[json[i].uuid] = loader.parse(json[i]);
+			}
+
 		}
 	}
 

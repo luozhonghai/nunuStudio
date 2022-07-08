@@ -15,8 +15,9 @@ function GeometryAsset(parent)
 	Asset.call(this, parent);
 
 	this.setIcon(Global.FILE_PATH + "icons/misc/scene.png");
-	
+
 	var self = this;
+	this.meta = "geometry";
 
 	// Image
 	this.image = document.createElement("img");
@@ -33,12 +34,12 @@ function GeometryAsset(parent)
 		var context = new ContextMenu(DocumentBody);
 		context.size.set(130, 20);
 		context.position.set(event.clientX, event.clientY);
-		
+
 		context.addOption(Locale.rename, function()
 		{
 			Editor.addAction(new ChangeAction(self.asset, "name", Editor.prompt(Locale.rename, self.asset.name)));
 		});
-		
+
 		context.addOption(Locale.delete, function()
 		{
 			Editor.addAction(new RemoveResourceAction(self.asset, Editor.program, "geometries"));
@@ -48,7 +49,7 @@ function GeometryAsset(parent)
 		{
 			Editor.clipboard.set(JSON.stringify(self.asset.toJSON()), "text");
 		});
-		
+
 		context.addOption(Locale.cut, function()
 		{
 			if (self.asset !== null)

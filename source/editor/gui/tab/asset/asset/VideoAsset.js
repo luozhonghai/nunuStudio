@@ -28,6 +28,7 @@ function VideoAsset(parent)
 	this.setIcon(Global.FILE_PATH + "icons/misc/video.png");
 
 	var self = this;
+	this.meta = "video";
 
 	// Context menu event
 	this.element.oncontextmenu = function(event)
@@ -35,12 +36,12 @@ function VideoAsset(parent)
 		var context = new ContextMenu(DocumentBody);
 		context.size.set(130, 20);
 		context.position.set(event.clientX, event.clientY);
-		
+
 		context.addOption(Locale.rename, function()
 		{
 			Editor.addAction(new ChangeAction(self.asset, "name", Editor.prompt(Locale.delete + " " + Locale.video, self.asset.name)));
 		});
-		
+
 		context.addOption(Locale.delete, function()
 		{
 			if (Editor.confirm(Locale.delete + " " + Locale.video))
@@ -80,7 +81,7 @@ function VideoAsset(parent)
 				}, "." + self.asset.encoding);
 			}
 		});
-		
+
 		context.updateInterface();
 	};
 
