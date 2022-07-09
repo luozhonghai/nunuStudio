@@ -332,6 +332,7 @@ function AssetExplorerMenu(parent)
 
 	create.updateInterface();
 
+
 	var filter = new DropdownMenu(this);
 	//filter.setMode(Component.TOP_RIGHT);
 	filter.setText("Filter");
@@ -382,6 +383,8 @@ function AssetExplorerMenu(parent)
 	});
 
 	filter.updateInterface();
+
+
 }
 
 AssetExplorerMenu.prototype = Object.create(Component.prototype);

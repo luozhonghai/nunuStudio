@@ -12,6 +12,7 @@ source/config
 docs/editor/config
 
 build/desktop/
+build/editor/
 config
 
 config\.json

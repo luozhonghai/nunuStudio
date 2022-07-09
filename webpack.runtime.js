@@ -10,7 +10,7 @@ const config = {
 	target: "web",
 	devtool: "none",
 	mode: "production",
-	optimization: {minimize: true},
+	optimization: {minimize: false},
 	plugins: [
 		new Webpack.ProvidePlugin({
 			THREE: "three",

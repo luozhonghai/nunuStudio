@@ -1311,6 +1311,7 @@
       if (span.marker == marker) { return span }
     } }
   }
+
   // Remove a span from an array, returning undefined if no spans are
   // left (we don't store arrays for lines without spans).
   function removeMarkedSpan(spans, span) {
@@ -1319,9 +1320,16 @@
       { if (spans[i] != span) { (r || (r = [])).push(spans[i]); } }
     return r
   }
+
   // Add a span to a line.
-  function addMarkedSpan(line, span) {
-    line.markedSpans = line.markedSpans ? line.markedSpans.concat([span]) : [span];
+  function addMarkedSpan(line, span, op) {
+    var inThisOp = op && window.WeakSet && (op.markedSpans || (op.markedSpans = new WeakSet));
+    if (inThisOp && inThisOp.has(line.markedSpans)) {
+      line.markedSpans.push(span);
+    } else {
+      line.markedSpans = line.markedSpans ? line.markedSpans.concat([span]) : [span];
+      if (inThisOp) { inThisOp.add(line.markedSpans); }
+    }
     span.marker.attachLine(line);
   }
 
@@ -2186,6 +2194,7 @@
     if (cm.options.lineNumbers || markers) {
       var wrap$1 = ensureLineWrapped(lineView);
       var gutterWrap = lineView.gutter = elt("div", null, "CodeMirror-gutter-wrapper", ("left: " + (cm.options.fixedGutter ? dims.fixedPos : -dims.gutterTotalWidth) + "px"));
+      gutterWrap.setAttribute("aria-hidden", "true");
       cm.display.input.setUneditable(gutterWrap);
       wrap$1.insertBefore(gutterWrap, lineView.text);
       if (lineView.line.gutterClass)
@@ -2342,12 +2351,14 @@
   function mapFromLineView(lineView, line, lineN) {
     if (lineView.line == line)
       { return {map: lineView.measure.map, cache: lineView.measure.cache} }
-    for (var i = 0; i < lineView.rest.length; i++)
-      { if (lineView.rest[i] == line)
-        { return {map: lineView.measure.maps[i], cache: lineView.measure.caches[i]} } }
-    for (var i$1 = 0; i$1 < lineView.rest.length; i$1++)
-      { if (lineNo(lineView.rest[i$1]) > lineN)
-        { return {map: lineView.measure.maps[i$1], cache: lineView.measure.caches[i$1], before: true} } }
+    if (lineView.rest) {
+      for (var i = 0; i < lineView.rest.length; i++)
+        { if (lineView.rest[i] == line)
+          { return {map: lineView.measure.maps[i], cache: lineView.measure.caches[i]} } }
+      for (var i$1 = 0; i$1 < lineView.rest.length; i$1++)
+        { if (lineNo(lineView.rest[i$1]) > lineN)
+          { return {map: lineView.measure.maps[i$1], cache: lineView.measure.caches[i$1], before: true} } }
+    }
   }
 
   // Render a line into the hidden node display.externalMeasured. Used
@@ -3141,13 +3152,19 @@
     var curFragment = result.cursors = document.createDocumentFragment();
     var selFragment = result.selection = document.createDocumentFragment();
 
+    var customCursor = cm.options.$customCursor;
+    if (customCursor) { primary = true; }
     for (var i = 0; i < doc.sel.ranges.length; i++) {
       if (!primary && i == doc.sel.primIndex) { continue }
       var range = doc.sel.ranges[i];
       if (range.from().line >= cm.display.viewTo || range.to().line < cm.display.viewFrom) { continue }
       var collapsed = range.empty();
-      if (collapsed || cm.options.showCursorWhenSelecting)
-        { drawSelectionCursor(cm, range.head, curFragment); }
+      if (customCursor) {
+        var head = customCursor(cm, range);
+        if (head) { drawSelectionCursor(cm, head, curFragment); }
+      } else if (collapsed || cm.options.showCursorWhenSelecting) {
+        drawSelectionCursor(cm, range.head, curFragment);
+      }
       if (!collapsed)
         { drawSelectionRange(cm, range, selFragment); }
     }
@@ -3162,6 +3179,12 @@
     cursor.style.left = pos.left + "px";
     cursor.style.top = pos.top + "px";
     cursor.style.height = Math.max(0, pos.bottom - pos.top) * cm.options.cursorHeight + "px";
+
+    if (/\bcm-fat-cursor\b/.test(cm.getWrapperElement().className)) {
+      var charPos = charCoords(cm, head, "div", null, null);
+      var width = charPos.right - charPos.left;
+      cursor.style.width = (width > 0 ? width : cm.defaultCharWidth()) + "px";
+    }
 
     if (pos.other) {
       // Secondary cursor, shown when on a 'jump' in bi-directional text
@@ -3335,10 +3358,14 @@
   function updateHeightsInViewport(cm) {
     var display = cm.display;
     var prevBottom = display.lineDiv.offsetTop;
+    var viewTop = Math.max(0, display.scroller.getBoundingClientRect().top);
+    var oldHeight = display.lineDiv.getBoundingClientRect().top;
+    var mustScroll = 0;
     for (var i = 0; i < display.view.length; i++) {
       var cur = display.view[i], wrapping = cm.options.lineWrapping;
       var height = (void 0), width = 0;
       if (cur.hidden) { continue }
+      oldHeight += cur.line.height;
       if (ie && ie_version < 8) {
         var bot = cur.node.offsetTop + cur.node.offsetHeight;
         height = bot - prevBottom;
@@ -3353,6 +3380,7 @@
       }
       var diff = cur.line.height - height;
       if (diff > .005 || diff < -.005) {
+        if (oldHeight < viewTop) { mustScroll -= diff; }
         updateLineHeight(cur.line, height);
         updateWidgetHeight(cur.line);
         if (cur.rest) { for (var j = 0; j < cur.rest.length; j++)
@@ -3367,6 +3395,7 @@
         }
       }
     }
+    if (Math.abs(mustScroll) > 2) { display.scroller.scrollTop += mustScroll; }
   }
 
   // Read and store the height of line widgets associated with the
@@ -3430,8 +3459,8 @@
       // Set pos and end to the cursor positions around the character pos sticks to
       // If pos.sticky == "before", that is around pos.ch - 1, otherwise around pos.ch
       // If pos == Pos(_, 0, "before"), pos and end are unchanged
-      pos = pos.ch ? Pos(pos.line, pos.sticky == "before" ? pos.ch - 1 : pos.ch, "after") : pos;
       end = pos.sticky == "before" ? Pos(pos.line, pos.ch + 1, "before") : pos;
+      pos = pos.ch ? Pos(pos.line, pos.sticky == "before" ? pos.ch - 1 : pos.ch, "after") : pos;
     }
     for (var limit = 0; limit < 5; limit++) {
       var changed = false;
@@ -3627,6 +3656,7 @@
       this.vert.firstChild.style.height =
         Math.max(0, measure.scrollHeight - measure.clientHeight + totalHeight) + "px";
     } else {
+      this.vert.scrollTop = 0;
       this.vert.style.display = "";
       this.vert.firstChild.style.height = "0";
     }
@@ -3782,7 +3812,8 @@
       scrollLeft: null, scrollTop: null, // Intermediate scroll position, not pushed to DOM yet
       scrollToPos: null,       // Used to scroll to a specific position
       focus: false,
-      id: ++nextOpId           // Unique ID
+      id: ++nextOpId,          // Unique ID
+      markArrays: null         // Used by addMarkedSpan
     };
     pushOperation(cm.curOp);
   }
@@ -4235,6 +4266,8 @@
   function updateGutterSpace(display) {
     var width = display.gutters.offsetWidth;
     display.sizer.style.marginLeft = width + "px";
+    // Send an event to consumers responding to changes in gutter width.
+    signalLater(display, "gutterChanged", display);
   }
 
   function setDocumentHeight(cm, measure) {
@@ -4374,6 +4407,10 @@
     // The element in which the editor lives.
     d.wrapper = elt("div", [d.scrollbarFiller, d.gutterFiller, d.scroller], "CodeMirror");
 
+    // This attribute is respected by automatic translation systems such as Google Translate,
+    // and may also be respected by tools used by human translators.
+    d.wrapper.setAttribute('translate', 'no');
+
     // Work around IE7 z-index bug (not perfect, hence IE7 not really being supported)
     if (ie && ie_version < 8) { d.gutters.style.zIndex = -1; d.scroller.style.paddingRight = 0; }
     if (!webkit && !(gecko && mobile)) { d.scroller.draggable = true; }
@@ -4471,6 +4508,12 @@
 
   function onScrollWheel(cm, e) {
     var delta = wheelEventDelta(e), dx = delta.x, dy = delta.y;
+    var pixelsPerUnit = wheelPixelsPerUnit;
+    if (e.deltaMode === 0) {
+      dx = e.deltaX;
+      dy = e.deltaY;
+      pixelsPerUnit = 1;
+    }
 
     var display = cm.display, scroll = display.scroller;
     // Quit if there's nothing to scroll here
@@ -4499,10 +4542,10 @@
     // estimated pixels/delta value, we just handle horizontal
     // scrolling entirely here. It'll be slightly off from native, but
     // better than glitching out.
-    if (dx && !gecko && !presto && wheelPixelsPerUnit != null) {
+    if (dx && !gecko && !presto && pixelsPerUnit != null) {
       if (dy && canScrollY)
-        { updateScrollTop(cm, Math.max(0, scroll.scrollTop + dy * wheelPixelsPerUnit)); }
-      setScrollLeft(cm, Math.max(0, scroll.scrollLeft + dx * wheelPixelsPerUnit));
+        { updateScrollTop(cm, Math.max(0, scroll.scrollTop + dy * pixelsPerUnit)); }
+      setScrollLeft(cm, Math.max(0, scroll.scrollLeft + dx * pixelsPerUnit));
       // Only prevent default scrolling if vertical scrolling is
       // actually possible. Otherwise, it causes vertical scroll
       // jitter on OSX trackpads when deltaX is small and deltaY
@@ -4515,15 +4558,15 @@
 
     // 'Project' the visible viewport to cover the area that is being
     // scrolled into view (if we know enough to estimate it).
-    if (dy && wheelPixelsPerUnit != null) {
-      var pixels = dy * wheelPixelsPerUnit;
+    if (dy && pixelsPerUnit != null) {
+      var pixels = dy * pixelsPerUnit;
       var top = cm.doc.scrollTop, bot = top + display.wrapper.clientHeight;
       if (pixels < 0) { top = Math.max(0, top + pixels - 50); }
       else { bot = Math.min(cm.doc.height, bot + pixels + 50); }
       updateDisplaySimple(cm, {top: top, bottom: bot});
     }
 
-    if (wheelSamples < 20) {
+    if (wheelSamples < 20 && e.deltaMode !== 0) {
       if (display.wheelStartX == null) {
         display.wheelStartX = scroll.scrollLeft; display.wheelStartY = scroll.scrollTop;
         display.wheelDX = dx; display.wheelDY = dy;
@@ -4782,6 +4825,7 @@
     estimateLineHeights(cm);
     loadMode(cm);
     setDirectionClass(cm);
+    cm.options.direction = doc.direction;
     if (!cm.options.lineWrapping) { findMaxLine(cm); }
     cm.options.mode = doc.modeOption;
     regChange(cm);
@@ -5958,7 +6002,7 @@
       if (marker.collapsed && curLine != from.line) { updateLineHeight(line, 0); }
       addMarkedSpan(line, new MarkedSpan(marker,
                                          curLine == from.line ? from.ch : null,
-                                         curLine == to.line ? to.ch : null));
+                                         curLine == to.line ? to.ch : null), doc.cm && doc.cm.curOp);
       ++curLine;
     });
     // lineIsHidden depends on the presence of the spans, so needs a second pass
@@ -6130,6 +6174,7 @@
     getRange: function(from, to, lineSep) {
       var lines = getBetween(this, clipPos(this, from), clipPos(this, to));
       if (lineSep === false) { return lines }
+      if (lineSep === '') { return lines.join('') }
       return lines.join(lineSep || this.lineSeparator())
     },
 
@@ -6181,7 +6226,7 @@
       var out = [];
       for (var i = 0; i < ranges.length; i++)
         { out[i] = new Range(clipPos(this, ranges[i].anchor),
-                           clipPos(this, ranges[i].head)); }
+                           clipPos(this, ranges[i].head || ranges[i].anchor)); }
       if (primary == null) { primary = Math.min(ranges.length - 1, this.sel.primIndex); }
       setSelection(this, normalizeSelection(this.cm, out, primary), options);
     }),
@@ -6684,10 +6729,9 @@
   // Very basic readline/emacs-style bindings, which are standard on Mac.
   keyMap.emacsy = {
     "Ctrl-F": "goCharRight", "Ctrl-B": "goCharLeft", "Ctrl-P": "goLineUp", "Ctrl-N": "goLineDown",
-    "Alt-F": "goWordRight", "Alt-B": "goWordLeft", "Ctrl-A": "goLineStart", "Ctrl-E": "goLineEnd",
-    "Ctrl-V": "goPageDown", "Shift-Ctrl-V": "goPageUp", "Ctrl-D": "delCharAfter", "Ctrl-H": "delCharBefore",
-    "Alt-D": "delWordAfter", "Alt-Backspace": "delWordBefore", "Ctrl-K": "killLine", "Ctrl-T": "transposeChars",
-    "Ctrl-O": "openLine"
+    "Ctrl-A": "goLineStart", "Ctrl-E": "goLineEnd", "Ctrl-V": "goPageDown", "Shift-Ctrl-V": "goPageUp",
+    "Ctrl-D": "delCharAfter", "Ctrl-H": "delCharBefore", "Alt-Backspace": "delWordBefore", "Ctrl-K": "killLine",
+    "Ctrl-T": "transposeChars", "Ctrl-O": "openLine"
   };
   keyMap.macDefault = {
     "Cmd-A": "selectAll", "Cmd-D": "deleteLine", "Cmd-Z": "undo", "Shift-Cmd-Z": "redo", "Cmd-Y": "redo",
@@ -8199,7 +8243,7 @@
   }
 
   function hiddenTextarea() {
-    var te = elt("textarea", null, null, "position: absolute; bottom: -1em; padding: 0; width: 1px; height: 1em; outline: none");
+    var te = elt("textarea", null, null, "position: absolute; bottom: -1em; padding: 0; width: 1px; height: 1em; min-height: 1em; outline: none");
     var div = elt("div", [te], null, "overflow: hidden; position: relative; width: 3px; height: 0px;");
     // The textarea is kept positioned near the cursor to prevent the
     // fact that it'll be scrolled into view on input from scrolling
@@ -8766,6 +8810,7 @@
 
     var input = this, cm = input.cm;
     var div = input.div = display.lineDiv;
+    div.contentEditable = true;
     disableBrowserMagic(div, cm.options.spellcheck, cm.options.autocorrect, cm.options.autocapitalize);
 
     function belongsToInput(e) {
@@ -8832,7 +8877,7 @@
       var kludge = hiddenTextarea(), te = kludge.firstChild;
       cm.display.lineSpace.insertBefore(kludge, cm.display.lineSpace.firstChild);
       te.value = lastCopied.text.join("\n");
-      var hadFocus = document.activeElement;
+      var hadFocus = activeElt();
       selectInput(te);
       setTimeout(function () {
         cm.display.lineSpace.removeChild(kludge);
@@ -8855,7 +8900,7 @@
 
   ContentEditableInput.prototype.prepareSelection = function () {
     var result = prepareSelection(this.cm, false);
-    result.focus = document.activeElement == this.div;
+    result.focus = activeElt() == this.div;
     return result
   };
 
@@ -8951,7 +8996,7 @@
 
   ContentEditableInput.prototype.focus = function () {
     if (this.cm.options.readOnly != "nocursor") {
-      if (!this.selectionInEditor() || document.activeElement != this.div)
+      if (!this.selectionInEditor() || activeElt() != this.div)
         { this.showSelection(this.prepareSelection(), true); }
       this.div.focus();
     }
@@ -8962,9 +9007,11 @@
   ContentEditableInput.prototype.supportsTouch = function () { return true };
 
   ContentEditableInput.prototype.receivedFocus = function () {
+      var this$1 = this;
+
     var input = this;
     if (this.selectionInEditor())
-      { this.pollSelection(); }
+      { setTimeout(function () { return this$1.pollSelection(); }, 20); }
     else
       { runInOp(this.cm, function () { return input.cm.curOp.selectionChanged = true; }); }
 
@@ -9793,7 +9840,7 @@
 
   addLegacyProps(CodeMirror);
 
-  CodeMirror.version = "5.59.4";
+  CodeMirror.version = "5.64.0";
 
   return CodeMirror;
 
@@ -10140,7 +10187,7 @@
   };
 
 
-  function sortLines(cm, caseSensitive) {
+  function sortLines(cm, caseSensitive, direction) {
     if (cm.isReadOnly()) return CodeMirror.Pass
     var ranges = cm.listSelections(), toSort = [], selected;
     for (var i = 0; i < ranges.length; i++) {
@@ -10162,12 +10209,12 @@
         var start = Pos(from, 0), end = Pos(to);
         var lines = cm.getRange(start, end, false);
         if (caseSensitive)
-          lines.sort();
+          lines.sort(function(a, b) { return a < b ? -direction : a == b ? 0 : direction; });
         else
           lines.sort(function(a, b) {
             var au = a.toUpperCase(), bu = b.toUpperCase();
             if (au != bu) { a = au; b = bu; }
-            return a < b ? -1 : a == b ? 0 : 1;
+            return a < b ? -direction : a == b ? 0 : direction;
           });
         cm.replaceRange(lines, start, end);
         if (selected) ranges.push({anchor: start, head: Pos(to + 1, 0)});
@@ -10176,8 +10223,10 @@
     });
   }
 
-  cmds.sortLines = function(cm) { sortLines(cm, true); };
-  cmds.sortLinesInsensitive = function(cm) { sortLines(cm, false); };
+  cmds.sortLines = function(cm) { sortLines(cm, true, 1); };
+  cmds.reverseSortLines = function(cm) { sortLines(cm, true, -1); };
+  cmds.sortLinesInsensitive = function(cm) { sortLines(cm, false, 1); };
+  cmds.reverseSortLinesInsensitive = function(cm) { sortLines(cm, false, -1); };
 
   cmds.nextBookmark = function(cm) {
     var marks = cm.state.sublimeBookmarks;
@@ -10410,7 +10459,9 @@
     "Cmd-J": "joinLines",
     "Shift-Cmd-D": "duplicateLine",
     "F5": "sortLines",
+    "Shift-F5": "reverseSortLines",
     "Cmd-F5": "sortLinesInsensitive",
+    "Shift-Cmd-F5": "reverseSortLinesInsensitive",
     "F2": "nextBookmark",
     "Shift-F2": "prevBookmark",
     "Cmd-F2": "toggleBookmark",
@@ -10472,7 +10523,9 @@
     "Ctrl-J": "joinLines",
     "Shift-Ctrl-D": "duplicateLine",
     "F9": "sortLines",
+    "Shift-F9": "reverseSortLines",
     "Ctrl-F9": "sortLinesInsensitive",
+    "Shift-Ctrl-F9": "reverseSortLinesInsensitive",
     "F2": "nextBookmark",
     "Shift-F2": "prevBookmark",
     "Ctrl-F2": "toggleBookmark",
@@ -10527,6 +10580,7 @@
 })(function(CodeMirror) {
   "use strict";
 
+  var cmds = CodeMirror.commands;
   var Pos = CodeMirror.Pos;
   function posEq(a, b) { return a.line == b.line && a.ch == b.ch; }
 
@@ -10546,7 +10600,8 @@
 
   var lastKill = null;
 
-  function kill(cm, from, to, ring, text) {
+  // Internal generic kill function, used by several mapped kill "family" functions.
+  function _kill(cm, from, to, ring, text) {
     if (text == null) text = cm.getRange(from, to);
 
     if (ring == "grow" && lastKill && lastKill.cm == cm && posEq(from, lastKill.pos) && cm.isClean(lastKill.gen))
@@ -10672,17 +10727,17 @@
     var i = selections.length;
     while (i--) {
       cursor = selections[i].head;
-      kill(cm, cursor, findEnd(cm, cursor, by, dir), ring);
+      _kill(cm, cursor, findEnd(cm, cursor, by, dir), ring);
     }
   }
 
-  function killRegion(cm, ring) {
+  function _killRegion(cm, ring) {
     if (cm.somethingSelected()) {
       var selections = cm.listSelections(), selection;
       var i = selections.length;
       while (i--) {
         selection = selections[i];
-        kill(cm, selection.anchor, selection.head, ring);
+        _kill(cm, selection.anchor, selection.head, ring);
       }
       return true;
     }
@@ -10721,13 +10776,6 @@
     }
   }
 
-  function addPrefixMap(cm) {
-    cm.state.emacsPrefixMap = true;
-    cm.addKeyMap(prefixMap);
-    cm.on("keyHandled", maybeRemovePrefixMap);
-    cm.on("inputRead", maybeRemovePrefixMap);
-  }
-
   function maybeRemovePrefixMap(cm, arg) {
     if (typeof arg == "string" && (/^\d$/.test(arg) || arg == "Ctrl-U")) return;
     cm.removeKeyMap(prefixMap);
@@ -10738,7 +10786,7 @@
 
   // Utilities
 
-  function setMark(cm) {
+  cmds.setMark = function (cm) {
     cm.setCursor(cm.getCursor());
     cm.setExtending(!cm.getExtending());
     cm.on("change", function() { cm.setExtending(false); });
@@ -10792,145 +10840,266 @@
     }
   }
 
-  function quit(cm) {
+  // Commands. Names should match emacs function names (albeit in camelCase)
+  // except where emacs function names collide with code mirror core commands.
+
+  cmds.killRegion = function(cm) {
+    _kill(cm, cm.getCursor("start"), cm.getCursor("end"), true);
+  };
+
+  // Maps to emacs kill-line
+  cmds.killLineEmacs = repeated(function(cm) {
+    var start = cm.getCursor(), end = cm.clipPos(Pos(start.line));
+    var text = cm.getRange(start, end);
+    if (!/\S/.test(text)) {
+      text += "\n";
+      end = Pos(start.line + 1, 0);
+    }
+    _kill(cm, start, end, "grow", text);
+  });
+
+  cmds.killRingSave = function(cm) {
+    addToRing(cm.getSelection());
+    clearMark(cm);
+  };
+
+  cmds.yank = function(cm) {
+    var start = cm.getCursor();
+    cm.replaceRange(getFromRing(getPrefix(cm)), start, start, "paste");
+    cm.setSelection(start, cm.getCursor());
+  };
+
+  cmds.yankPop = function(cm) {
+    cm.replaceSelection(popFromRing(), "around", "paste");
+  };
+
+  cmds.forwardChar = move(byChar, 1);
+
+  cmds.backwardChar = move(byChar, -1)
+
+  cmds.deleteChar = function(cm) { killTo(cm, byChar, 1, false); };
+
+  cmds.deleteForwardChar = function(cm) {
+    _killRegion(cm, false) || killTo(cm, byChar, 1, false);
+  };
+
+  cmds.deleteBackwardChar = function(cm) {
+    _killRegion(cm, false) || killTo(cm, byChar, -1, false);
+  };
+
+  cmds.forwardWord = move(byWord, 1);
+
+  cmds.backwardWord = move(byWord, -1);
+
+  cmds.killWord = function(cm) { killTo(cm, byWord, 1, "grow"); };
+
+  cmds.backwardKillWord = function(cm) { killTo(cm, byWord, -1, "grow"); };
+
+  cmds.nextLine = move(byLine, 1);
+
+  cmds.previousLine = move(byLine, -1);
+
+  cmds.scrollDownCommand = move(byPage, -1);
+
+  cmds.scrollUpCommand = move(byPage, 1);
+
+  cmds.backwardParagraph = move(byParagraph, -1);
+
+  cmds.forwardParagraph = move(byParagraph, 1);
+
+  cmds.backwardSentence = move(bySentence, -1);
+
+  cmds.forwardSentence = move(bySentence, 1);
+
+  cmds.killSentence = function(cm) { killTo(cm, bySentence, 1, "grow"); };
+
+  cmds.backwardKillSentence = function(cm) {
+    _kill(cm, cm.getCursor(), bySentence(cm, cm.getCursor(), 1), "grow");
+  };
+
+  cmds.killSexp = function(cm) { killTo(cm, byExpr, 1, "grow"); };
+
+  cmds.backwardKillSexp = function(cm) { killTo(cm, byExpr, -1, "grow"); };
+
+  cmds.forwardSexp = move(byExpr, 1);
+
+  cmds.backwardSexp = move(byExpr, -1);
+
+  cmds.markSexp = function(cm) {
+    var cursor = cm.getCursor();
+    cm.setSelection(findEnd(cm, cursor, byExpr, 1), cursor);
+  };
+
+  cmds.transposeSexps = function(cm) {
+    var leftStart = byExpr(cm, cm.getCursor(), -1);
+    var leftEnd = byExpr(cm, leftStart, 1);
+    var rightEnd = byExpr(cm, leftEnd, 1);
+    var rightStart = byExpr(cm, rightEnd, -1);
+    cm.replaceRange(cm.getRange(rightStart, rightEnd) +
+                    cm.getRange(leftEnd, rightStart) +
+                    cm.getRange(leftStart, leftEnd), leftStart, rightEnd);
+  };
+
+  cmds.backwardUpList = repeated(toEnclosingExpr);
+
+  cmds.justOneSpace = function(cm) {
+    var pos = cm.getCursor(), from = pos.ch;
+    var to = pos.ch, text = cm.getLine(pos.line);
+    while (from && /\s/.test(text.charAt(from - 1))) --from;
+    while (to < text.length && /\s/.test(text.charAt(to))) ++to;
+    cm.replaceRange(" ", Pos(pos.line, from), Pos(pos.line, to));
+  };
+
+  cmds.openLine = repeated(function(cm) {
+    cm.replaceSelection("\n", "start");
+  });
+
+  // maps to emacs 'transpose-chars'
+  cmds.transposeCharsRepeatable = repeated(function(cm) {
+    cm.execCommand("transposeChars");
+  });
+
+  cmds.capitalizeWord = repeated(function(cm) {
+    operateOnWord(cm, function(w) {
+      var letter = w.search(/\w/);
+      if (letter == -1) return w;
+      return w.slice(0, letter) + w.charAt(letter).toUpperCase() +
+          w.slice(letter + 1).toLowerCase();
+    });
+  });
+
+  cmds.upcaseWord = repeated(function(cm) {
+    operateOnWord(cm, function(w) { return w.toUpperCase(); });
+  });
+
+  cmds.downcaseWord = repeated(function(cm) {
+    operateOnWord(cm, function(w) { return w.toLowerCase(); });
+  });
+
+  // maps to emacs 'undo'
+  cmds.undoRepeatable = repeated("undo");
+
+  cmds.keyboardQuit = function(cm) {
     cm.execCommand("clearSearch");
     clearMark(cm);
   }
 
-  CodeMirror.emacs = {kill: kill, killRegion: killRegion, repeated: repeated};
+  cmds.newline = repeated(function(cm) { cm.replaceSelection("\n", "end"); });
+
+  cmds.gotoLine = function(cm) {
+    var prefix = getPrefix(cm, true);
+    if (prefix != null && prefix > 0) return cm.setCursor(prefix - 1);
+
+    getInput(cm, "Goto line", function(str) {
+      var num;
+      if (str && !isNaN(num = Number(str)) && num == (num|0) && num > 0)
+      cm.setCursor(num - 1);
+    });
+  };
+
+  cmds.indentRigidly = function(cm) {
+    cm.indentSelection(getPrefix(cm, true) || cm.getOption("indentUnit"));
+  };
+
+  cmds.exchangePointAndMark = function(cm) {
+    cm.setSelection(cm.getCursor("head"), cm.getCursor("anchor"));
+  };
+
+  cmds.quotedInsertTab = repeated("insertTab");
+
+  cmds.universalArgument = function addPrefixMap(cm) {
+    cm.state.emacsPrefixMap = true;
+    cm.addKeyMap(prefixMap);
+    cm.on("keyHandled", maybeRemovePrefixMap);
+    cm.on("inputRead", maybeRemovePrefixMap);
+  };
+
+  CodeMirror.emacs = {kill: _kill, killRegion: _killRegion, repeated: repeated};
 
   // Actual keymap
-
   var keyMap = CodeMirror.keyMap.emacs = CodeMirror.normalizeKeyMap({
-    "Ctrl-W": function(cm) {kill(cm, cm.getCursor("start"), cm.getCursor("end"), true);},
-    "Ctrl-K": repeated(function(cm) {
-      var start = cm.getCursor(), end = cm.clipPos(Pos(start.line));
-      var text = cm.getRange(start, end);
-      if (!/\S/.test(text)) {
-        text += "\n";
-        end = Pos(start.line + 1, 0);
-      }
-      kill(cm, start, end, "grow", text);
-    }),
-    "Alt-W": function(cm) {
-      addToRing(cm.getSelection());
-      clearMark(cm);
-    },
-    "Ctrl-Y": function(cm) {
-      var start = cm.getCursor();
-      cm.replaceRange(getFromRing(getPrefix(cm)), start, start, "paste");
-      cm.setSelection(start, cm.getCursor());
-    },
-    "Alt-Y": function(cm) {cm.replaceSelection(popFromRing(), "around", "paste");},
-
-    "Ctrl-Space": setMark, "Ctrl-Shift-2": setMark,
-
-    "Ctrl-F": move(byChar, 1), "Ctrl-B": move(byChar, -1),
-    "Right": move(byChar, 1), "Left": move(byChar, -1),
-    "Ctrl-D": function(cm) { killTo(cm, byChar, 1, false); },
-    "Delete": function(cm) { killRegion(cm, false) || killTo(cm, byChar, 1, false); },
-    "Ctrl-H": function(cm) { killTo(cm, byChar, -1, false); },
-    "Backspace": function(cm) { killRegion(cm, false) || killTo(cm, byChar, -1, false); },
-
-    "Alt-F": move(byWord, 1), "Alt-B": move(byWord, -1),
-    "Alt-Right": move(byWord, 1), "Alt-Left": move(byWord, -1),
-    "Alt-D": function(cm) { killTo(cm, byWord, 1, "grow"); },
-    "Alt-Backspace": function(cm) { killTo(cm, byWord, -1, "grow"); },
-
-    "Ctrl-N": move(byLine, 1), "Ctrl-P": move(byLine, -1),
-    "Down": move(byLine, 1), "Up": move(byLine, -1),
-    "Ctrl-A": "goLineStart", "Ctrl-E": "goLineEnd",
-    "End": "goLineEnd", "Home": "goLineStart",
-
-    "Alt-V": move(byPage, -1), "Ctrl-V": move(byPage, 1),
-    "PageUp": move(byPage, -1), "PageDown": move(byPage, 1),
-
-    "Ctrl-Up": move(byParagraph, -1), "Ctrl-Down": move(byParagraph, 1),
-
-    "Alt-A": move(bySentence, -1), "Alt-E": move(bySentence, 1),
-    "Alt-K": function(cm) { killTo(cm, bySentence, 1, "grow"); },
-
-    "Ctrl-Alt-K": function(cm) { killTo(cm, byExpr, 1, "grow"); },
-    "Ctrl-Alt-Backspace": function(cm) { killTo(cm, byExpr, -1, "grow"); },
-    "Ctrl-Alt-F": move(byExpr, 1), "Ctrl-Alt-B": move(byExpr, -1, "grow"),
-
-    "Shift-Ctrl-Alt-2": function(cm) {
-      var cursor = cm.getCursor();
-      cm.setSelection(findEnd(cm, cursor, byExpr, 1), cursor);
-    },
-    "Ctrl-Alt-T": function(cm) {
-      var leftStart = byExpr(cm, cm.getCursor(), -1), leftEnd = byExpr(cm, leftStart, 1);
-      var rightEnd = byExpr(cm, leftEnd, 1), rightStart = byExpr(cm, rightEnd, -1);
-      cm.replaceRange(cm.getRange(rightStart, rightEnd) + cm.getRange(leftEnd, rightStart) +
-                      cm.getRange(leftStart, leftEnd), leftStart, rightEnd);
-    },
-    "Ctrl-Alt-U": repeated(toEnclosingExpr),
-
-    "Alt-Space": function(cm) {
-      var pos = cm.getCursor(), from = pos.ch, to = pos.ch, text = cm.getLine(pos.line);
-      while (from && /\s/.test(text.charAt(from - 1))) --from;
-      while (to < text.length && /\s/.test(text.charAt(to))) ++to;
-      cm.replaceRange(" ", Pos(pos.line, from), Pos(pos.line, to));
-    },
-    "Ctrl-O": repeated(function(cm) { cm.replaceSelection("\n", "start"); }),
-    "Ctrl-T": repeated(function(cm) {
-      cm.execCommand("transposeChars");
-    }),
-
-    "Alt-C": repeated(function(cm) {
-      operateOnWord(cm, function(w) {
-        var letter = w.search(/\w/);
-        if (letter == -1) return w;
-        return w.slice(0, letter) + w.charAt(letter).toUpperCase() + w.slice(letter + 1).toLowerCase();
-      });
-    }),
-    "Alt-U": repeated(function(cm) {
-      operateOnWord(cm, function(w) { return w.toUpperCase(); });
-    }),
-    "Alt-L": repeated(function(cm) {
-      operateOnWord(cm, function(w) { return w.toLowerCase(); });
-    }),
-
+    "Ctrl-W": "killRegion",
+    "Ctrl-K": "killLineEmacs",
+    "Alt-W": "killRingSave",
+    "Ctrl-Y": "yank",
+    "Alt-Y": "yankPop",
+    "Ctrl-Space": "setMark",
+    "Ctrl-Shift-2": "setMark",
+    "Ctrl-F": "forwardChar",
+    "Ctrl-B": "backwardChar",
+    "Right": "forwardChar",
+    "Left": "backwardChar",
+    "Ctrl-D": "deleteChar",
+    "Delete": "deleteForwardChar",
+    "Ctrl-H": "deleteBackwardChar",
+    "Backspace": "deleteBackwardChar",
+    "Alt-F": "forwardWord",
+    "Alt-B": "backwardWord",
+    "Alt-Right": "forwardWord",
+    "Alt-Left": "backwardWord",
+    "Alt-D": "killWord",
+    "Alt-Backspace": "backwardKillWord",
+    "Ctrl-N": "nextLine",
+    "Ctrl-P": "previousLine",
+    "Down": "nextLine",
+    "Up": "previousLine",
+    "Ctrl-A": "goLineStart",
+    "Ctrl-E": "goLineEnd",
+    "End": "goLineEnd",
+    "Home": "goLineStart",
+    "Alt-V": "scrollDownCommand",
+    "Ctrl-V": "scrollUpCommand",
+    "PageUp": "scrollDownCommand",
+    "PageDown": "scrollUpCommand",
+    "Ctrl-Up": "backwardParagraph",
+    "Ctrl-Down": "forwardParagraph",
+    "Alt-{": "backwardParagraph",
+    "Alt-}": "forwardParagraph",
+    "Alt-A": "backwardSentence",
+    "Alt-E": "forwardSentence",
+    "Alt-K": "killSentence",
+    "Ctrl-X Delete": "backwardKillSentence",
+    "Ctrl-Alt-K": "killSexp",
+    "Ctrl-Alt-Backspace": "backwardKillSexp",
+    "Ctrl-Alt-F": "forwardSexp",
+    "Ctrl-Alt-B": "backwardSexp",
+    "Shift-Ctrl-Alt-2": "markSexp",
+    "Ctrl-Alt-T": "transposeSexps",
+    "Ctrl-Alt-U": "backwardUpList",
+    "Alt-Space": "justOneSpace",
+    "Ctrl-O": "openLine",
+    "Ctrl-T": "transposeCharsRepeatable",
+    "Alt-C": "capitalizeWord",
+    "Alt-U": "upcaseWord",
+    "Alt-L": "downcaseWord",
     "Alt-;": "toggleComment",
-
-    "Ctrl-/": repeated("undo"), "Shift-Ctrl--": repeated("undo"),
-    "Ctrl-Z": repeated("undo"), "Cmd-Z": repeated("undo"),
+    "Ctrl-/": "undoRepeatable",
+    "Shift-Ctrl--": "undoRepeatable",
+    "Ctrl-Z": "undoRepeatable",
+    "Cmd-Z": "undoRepeatable",
+    "Ctrl-X U": "undoRepeatable",
     "Shift-Ctrl-Z": "redo",
-    "Shift-Alt-,": "goDocStart", "Shift-Alt-.": "goDocEnd",
-    "Ctrl-S": "findPersistentNext", "Ctrl-R": "findPersistentPrev", "Ctrl-G": quit, "Shift-Alt-5": "replace",
+    "Shift-Alt-,": "goDocStart",
+    "Shift-Alt-.": "goDocEnd",
+    "Ctrl-S": "findPersistentNext",
+    "Ctrl-R": "findPersistentPrev",
+    "Ctrl-G": "keyboardQuit",
+    "Shift-Alt-5": "replace",
     "Alt-/": "autocomplete",
     "Enter": "newlineAndIndent",
-    "Ctrl-J": repeated(function(cm) { cm.replaceSelection("\n", "end"); }),
+    "Ctrl-J": "newline",
     "Tab": "indentAuto",
-
-    "Alt-G G": function(cm) {
-      var prefix = getPrefix(cm, true);
-      if (prefix != null && prefix > 0) return cm.setCursor(prefix - 1);
-
-      getInput(cm, "Goto line", function(str) {
-        var num;
-        if (str && !isNaN(num = Number(str)) && num == (num|0) && num > 0)
-          cm.setCursor(num - 1);
-      });
-    },
-
-    "Ctrl-X Tab": function(cm) {
-      cm.indentSelection(getPrefix(cm, true) || cm.getOption("indentUnit"));
-    },
-    "Ctrl-X Ctrl-X": function(cm) {
-      cm.setSelection(cm.getCursor("head"), cm.getCursor("anchor"));
-    },
+    "Alt-G G": "gotoLine",
+    "Ctrl-X Tab": "indentRigidly",
+    "Ctrl-X Ctrl-X": "exchangePointAndMark",
     "Ctrl-X Ctrl-S": "save",
     "Ctrl-X Ctrl-W": "save",
     "Ctrl-X S": "saveAll",
     "Ctrl-X F": "open",
-    "Ctrl-X U": repeated("undo"),
     "Ctrl-X K": "close",
-    "Ctrl-X Delete": function(cm) { kill(cm, cm.getCursor(), bySentence(cm, cm.getCursor(), 1), "grow"); },
     "Ctrl-X H": "selectAll",
-
-    "Ctrl-Q Tab": repeated("insertTab"),
-    "Ctrl-U": addPrefixMap,
+    "Ctrl-Q Tab": "quotedInsertTab",
+    "Ctrl-U": "universalArgument",
     "fallthrough": "default"
   });
 
@@ -10989,6 +11158,27 @@
     mod(CodeMirror);
 })(function(CodeMirror) {
   'use strict';
+
+  var Pos = CodeMirror.Pos;
+
+  function transformCursor(cm, range) {
+    var vim = cm.state.vim;
+    if (!vim || vim.insertMode) return range.head;
+    var head = vim.sel.head;
+    if (!head)  return range.head;
+
+    if (vim.visualBlock) {
+      if (range.head.line != head.line) {
+        return;
+      }
+    }
+    if (range.from() == range.anchor && !range.empty()) {
+      if (range.head.line == head.line && range.head.ch != head.ch)
+        return new Pos(range.head.line, range.head.ch - 1);
+    }
+
+    return range.head;
+  }
 
   var defaultKeymap = [
     // Key to key mapping. This goes first to make it possible to override
@@ -11100,6 +11290,7 @@
     { keys: 'C', type: 'operator', operator: 'change', operatorArgs: { linewise: true }, context: 'visual'},
     { keys: '~', type: 'operatorMotion', operator: 'changeCase', motion: 'moveByCharacters', motionArgs: { forward: true }, operatorArgs: { shouldMoveCursor: true }, context: 'normal'},
     { keys: '~', type: 'operator', operator: 'changeCase', context: 'visual'},
+    { keys: '<C-u>', type: 'operatorMotion', operator: 'delete', motion: 'moveToStartOfLine', context: 'insert' },
     { keys: '<C-w>', type: 'operatorMotion', operator: 'delete', motion: 'moveByWords', motionArgs: { forward: false, wordEnd: false }, context: 'insert' },
     //ignore C-w in normal mode
     { keys: '<C-w>', type: 'idle', context: 'normal' },
@@ -11194,8 +11385,6 @@
     { name: 'global', shortName: 'g' }
   ];
 
-  var Pos = CodeMirror.Pos;
-
   var Vim = function() {
     function enterVimMode(cm) {
       cm.setOption('disableInput', true);
@@ -11211,15 +11400,13 @@
       cm.off('cursorActivity', onCursorActivity);
       CodeMirror.off(cm.getInputField(), 'paste', getOnPasteFn(cm));
       cm.state.vim = null;
+      if (highlightTimeout) clearTimeout(highlightTimeout);
     }
 
     function detachVimMap(cm, next) {
       if (this == CodeMirror.keyMap.vim) {
+        cm.options.$customCursor = null;
         CodeMirror.rmClass(cm.getWrapperElement(), "cm-fat-cursor");
-        if (cm.getOption("inputStyle") == "contenteditable" && document.body.style.caretColor != null) {
-          disableFatCursorMark(cm);
-          cm.getInputField().style.caretColor = "";
-        }
       }
 
       if (!next || next.attach != attachVimMap)
@@ -11227,55 +11414,13 @@
     }
     function attachVimMap(cm, prev) {
       if (this == CodeMirror.keyMap.vim) {
+        if (cm.curOp) cm.curOp.selectionChanged = true;
+        cm.options.$customCursor = transformCursor;
         CodeMirror.addClass(cm.getWrapperElement(), "cm-fat-cursor");
-        if (cm.getOption("inputStyle") == "contenteditable" && document.body.style.caretColor != null) {
-          enableFatCursorMark(cm);
-          cm.getInputField().style.caretColor = "transparent";
-        }
       }
 
       if (!prev || prev.attach != attachVimMap)
         enterVimMode(cm);
-    }
-
-    function updateFatCursorMark(cm) {
-      if (!cm.state.fatCursorMarks) return;
-      clearFatCursorMark(cm);
-      var ranges = cm.listSelections(), result = []
-      for (var i = 0; i < ranges.length; i++) {
-        var range = ranges[i];
-        if (range.empty()) {
-          var lineLength = cm.getLine(range.anchor.line).length;
-          if (range.anchor.ch < lineLength) {
-            result.push(cm.markText(range.anchor, Pos(range.anchor.line, range.anchor.ch + 1),
-                                    {className: "cm-fat-cursor-mark"}));
-          } else {
-            result.push(cm.markText(Pos(range.anchor.line, lineLength - 1),
-                                    Pos(range.anchor.line, lineLength),
-                                    {className: "cm-fat-cursor-mark"}));
-          }
-        }
-      }
-      cm.state.fatCursorMarks = result;
-    }
-
-    function clearFatCursorMark(cm) {
-      var marks = cm.state.fatCursorMarks;
-      if (marks) for (var i = 0; i < marks.length; i++) marks[i].clear();
-    }
-
-    function enableFatCursorMark(cm) {
-      cm.state.fatCursorMarks = [];
-      updateFatCursorMark(cm)
-      cm.on("cursorActivity", updateFatCursorMark)
-    }
-
-    function disableFatCursorMark(cm) {
-      clearFatCursorMark(cm);
-      cm.off("cursorActivity", updateFatCursorMark);
-      // explicitly set fatCursorMarks to null because event listener above
-      // can be invoke after removing it, if off is called from operation
-      cm.state.fatCursorMarks = null;
     }
 
     // Deprecated, simply setting the keymap works again.
@@ -11293,7 +11438,7 @@
       if (!vimKey) {
         return false;
       }
-      var cmd = CodeMirror.Vim.findKey(cm, vimKey);
+      var cmd = vimApi.findKey(cm, vimKey);
       if (typeof cmd == 'function') {
         CodeMirror.signal(cm, 'vim-keypress', vimKey);
       }
@@ -11366,6 +11511,9 @@
     var numbers = makeKeyRange(48, 10);
     var validMarks = [].concat(upperCaseAlphabet, lowerCaseAlphabet, numbers, ['<', '>']);
     var validRegisters = [].concat(upperCaseAlphabet, lowerCaseAlphabet, numbers, ['-', '"', '.', ':', '_', '/']);
+    var upperCaseChars;
+    try { upperCaseChars = new RegExp("^[\\p{Lu}]$", "u"); }
+    catch (_) { upperCaseChars = /^[A-Z]$/; }
 
     function isLine(cm, line) {
       return line >= cm.firstLine() && line <= cm.lastLine();
@@ -11380,7 +11528,7 @@
       return numberRegex.test(k);
     }
     function isUpperCase(k) {
-      return (/^[A-Z]$/).test(k);
+      return upperCaseChars.test(k);
     }
     function isWhiteSpaceString(k) {
       return (/^\s*$/).test(k);
@@ -11604,7 +11752,7 @@
           this.latestRegister = registerName;
           if (cm.openDialog) {
             this.onRecordingDone = cm.openDialog(
-                '(recording)['+registerName+']', null, {bottom:true});
+                document.createTextNode('(recording)['+registerName+']'), null, {bottom:true});
           }
           this.isRecording = true;
         }
@@ -11634,8 +11782,6 @@
           // executed in between.
           lastMotion: null,
           marks: {},
-          // Mark for rendering fake cursor for visual mode.
-          fakeCursor: null,
           insertMode: false,
           // Repeat count for changes made in insert mode, triggered by key
           // sequences like 3,i. Only exists when insertMode is true.
@@ -11707,7 +11853,7 @@
         exCommandDispatcher.map(lhs, rhs, ctx);
       },
       unmap: function(lhs, ctx) {
-        exCommandDispatcher.unmap(lhs, ctx);
+        return exCommandDispatcher.unmap(lhs, ctx);
       },
       // Non-recursive map function.
       // NOTE: This will not create mappings to key maps that aren't present
@@ -11847,7 +11993,7 @@
             match = (/<\w+-.+?>|<\w+>|./).exec(keys);
             key = match[0];
             keys = keys.substring(match.index + key.length);
-            CodeMirror.Vim.handleKey(cm, key, 'mapping');
+            vimApi.handleKey(cm, key, 'mapping');
           }
         }
 
@@ -11894,7 +12040,12 @@
           if (!keysMatcher) { clearInputState(cm); return false; }
           var context = vim.visualMode ? 'visual' :
                                          'normal';
-          var match = commandDispatcher.matchCommand(keysMatcher[2] || keysMatcher[1], defaultKeymap, vim.inputState, context);
+          var mainKey = keysMatcher[2] || keysMatcher[1];
+          if (vim.inputState.operatorShortcut && vim.inputState.operatorShortcut.slice(-1) == mainKey) {
+            // multikey operators act linewise by repeating only the last character
+            mainKey = vim.inputState.operatorShortcut;
+          }
+          var match = commandDispatcher.matchCommand(mainKey, defaultKeymap, vim.inputState, context);
           if (match.type == 'none') { clearInputState(cm); return false; }
           else if (match.type == 'partial') { return true; }
 
@@ -11930,7 +12081,7 @@
                 // clear VIM state in case it's in a bad state.
                 cm.state.vim = undefined;
                 maybeInitVimState(cm);
-                if (!CodeMirror.Vim.suppressErrorLogging) {
+                if (!vimApi.suppressErrorLogging) {
                   console['log'](e);
                 }
                 throw e;
@@ -12254,6 +12405,9 @@
         }
         inputState.operator = command.operator;
         inputState.operatorArgs = copyArgs(command.operatorArgs);
+        if (command.keys.length > 1) {
+          inputState.operatorShortcut = command.keys;
+        }
         if (command.exitVisualBlock) {
             vim.visualBlock = false;
             updateCmSelection(cm);
@@ -12582,17 +12736,17 @@
             var chOffset = Math.abs(lastSel.head.ch - lastSel.anchor.ch);
             if (lastSel.visualLine) {
               // Linewise Visual mode: The same number of lines.
-              newHead = Pos(oldAnchor.line + lineOffset, oldAnchor.ch);
+              newHead = new Pos(oldAnchor.line + lineOffset, oldAnchor.ch);
             } else if (lastSel.visualBlock) {
               // Blockwise Visual mode: The same number of lines and columns.
-              newHead = Pos(oldAnchor.line + lineOffset, oldAnchor.ch + chOffset);
+              newHead = new Pos(oldAnchor.line + lineOffset, oldAnchor.ch + chOffset);
             } else if (lastSel.head.line == lastSel.anchor.line) {
               // Normal Visual mode within one line: The same number of characters.
-              newHead = Pos(oldAnchor.line, oldAnchor.ch + chOffset);
+              newHead = new Pos(oldAnchor.line, oldAnchor.ch + chOffset);
             } else {
               // Normal Visual mode with several lines: The same number of lines, in the
               // last line the same number of characters as in the last line the last time.
-              newHead = Pos(oldAnchor.line + lineOffset, oldAnchor.ch);
+              newHead = new Pos(oldAnchor.line + lineOffset, oldAnchor.ch);
             }
             vim.visualMode = true;
             vim.visualLine = lastSel.visualLine;
@@ -12632,7 +12786,7 @@
                   ranges[i].head.ch = lineLength(cm, ranges[i].head.line);
                 }
               } else if (mode == 'line') {
-                ranges[0].head = Pos(ranges[0].head.line + 1, 0);
+                ranges[0].head = new Pos(ranges[0].head.line + 1, 0);
               }
             }
           } else {
@@ -12694,22 +12848,22 @@
     var motions = {
       moveToTopLine: function(cm, _head, motionArgs) {
         var line = getUserVisibleLines(cm).top + motionArgs.repeat -1;
-        return Pos(line, findFirstNonWhiteSpaceCharacter(cm.getLine(line)));
+        return new Pos(line, findFirstNonWhiteSpaceCharacter(cm.getLine(line)));
       },
       moveToMiddleLine: function(cm) {
         var range = getUserVisibleLines(cm);
         var line = Math.floor((range.top + range.bottom) * 0.5);
-        return Pos(line, findFirstNonWhiteSpaceCharacter(cm.getLine(line)));
+        return new Pos(line, findFirstNonWhiteSpaceCharacter(cm.getLine(line)));
       },
       moveToBottomLine: function(cm, _head, motionArgs) {
         var line = getUserVisibleLines(cm).bottom - motionArgs.repeat +1;
-        return Pos(line, findFirstNonWhiteSpaceCharacter(cm.getLine(line)));
+        return new Pos(line, findFirstNonWhiteSpaceCharacter(cm.getLine(line)));
       },
       expandToLine: function(_cm, head, motionArgs) {
         // Expands forward to end of line, and then to next line if repeat is
         // >1. Does not handle backward motion!
         var cur = head;
-        return Pos(cur.line + motionArgs.repeat - 1, Infinity);
+        return new Pos(cur.line + motionArgs.repeat - 1, Infinity);
       },
       findNext: function(cm, _head, motionArgs) {
         var state = getSearchState(cm);
@@ -12766,7 +12920,7 @@
         // For whatever reason, when we use the "to" as returned by searchcursor.js directly,
         // the resulting selection is extended by 1 char. Let's shrink it so that only the
         // match is selected.
-        var to = Pos(next[1].line, next[1].ch - 1);
+        var to = new Pos(next[1].line, next[1].ch - 1);
 
         if (vim.visualMode) {
           // If we were in visualLine or visualBlock mode, get out of it.
@@ -12815,8 +12969,8 @@
         if (vim.visualBlock && motionArgs.sameLine) {
           var sel = vim.sel;
           return [
-            clipCursorToContent(cm, Pos(sel.anchor.line, sel.head.ch)),
-            clipCursorToContent(cm, Pos(sel.head.line, sel.anchor.ch))
+            clipCursorToContent(cm, new Pos(sel.anchor.line, sel.head.ch)),
+            clipCursorToContent(cm, new Pos(sel.head.line, sel.anchor.ch))
           ];
         } else {
           return ([vim.sel.head, vim.sel.anchor]);
@@ -12856,7 +13010,7 @@
           // Vim places the cursor on the first non-whitespace character of
           // the line if there is one, else it places the cursor at the end
           // of the line, regardless of whether a mark was found.
-          best = Pos(best.line, findFirstNonWhiteSpaceCharacter(cm.getLine(best.line)));
+          best = new Pos(best.line, findFirstNonWhiteSpaceCharacter(cm.getLine(best.line)));
         }
         return best;
       },
@@ -12864,7 +13018,7 @@
         var cur = head;
         var repeat = motionArgs.repeat;
         var ch = motionArgs.forward ? cur.ch + repeat : cur.ch - repeat;
-        return Pos(cur.line, ch);
+        return new Pos(cur.line, ch);
       },
       moveByLines: function(cm, head, motionArgs, vim) {
         var cur = head;
@@ -12906,8 +13060,8 @@
           endCh=findFirstNonWhiteSpaceCharacter(cm.getLine(line));
           vim.lastHPos = endCh;
         }
-        vim.lastHSPos = cm.charCoords(Pos(line, endCh),'div').left;
-        return Pos(line, endCh);
+        vim.lastHSPos = cm.charCoords(new Pos(line, endCh),'div').left;
+        return new Pos(line, endCh);
       },
       moveByDisplayLines: function(cm, head, motionArgs, vim) {
         var cur = head;
@@ -12929,7 +13083,7 @@
             var goalCoords = { top: lastCharCoords.top + 8, left: vim.lastHSPos };
             var res = cm.coordsChar(goalCoords, 'div');
           } else {
-            var resCoords = cm.charCoords(Pos(cm.firstLine(), 0), 'div');
+            var resCoords = cm.charCoords(new Pos(cm.firstLine(), 0), 'div');
             resCoords.left = vim.lastHSPos;
             res = cm.coordsChar(resCoords, 'div');
           }
@@ -13009,7 +13163,7 @@
         // Go to the start of the line where the text begins, or the end for
         // whitespace-only lines
         var cursor = head;
-        return Pos(cursor.line,
+        return new Pos(cursor.line,
                    findFirstNonWhiteSpaceCharacter(cm.getLine(cursor.line)));
       },
       moveToMatchedSymbol: function(cm, head) {
@@ -13021,7 +13175,7 @@
         for (; ch < lineText.length; ch++) {
           symbol = lineText.charAt(ch);
           if (symbol && isMatchableSymbol(symbol)) {
-            var style = cm.getTokenTypeAt(Pos(line, ch + 1));
+            var style = cm.getTokenTypeAt(new Pos(line, ch + 1));
             if (style !== "string" && style !== "comment") {
               break;
             }
@@ -13030,21 +13184,21 @@
         if (ch < lineText.length) {
           // Only include angle brackets in analysis if they are being matched.
           var re = (ch === '<' || ch === '>') ? /[(){}[\]<>]/ : /[(){}[\]]/;
-          var matched = cm.findMatchingBracket(Pos(line, ch), {bracketRegex: re});
+          var matched = cm.findMatchingBracket(new Pos(line, ch), {bracketRegex: re});
           return matched.to;
         } else {
           return cursor;
         }
       },
       moveToStartOfLine: function(_cm, head) {
-        return Pos(head.line, 0);
+        return new Pos(head.line, 0);
       },
       moveToLineOrEdgeOfDocument: function(cm, _head, motionArgs) {
         var lineNum = motionArgs.forward ? cm.lastLine() : cm.firstLine();
         if (motionArgs.repeatIsExplicit) {
           lineNum = motionArgs.repeat - cm.getOption('firstLineNumber');
         }
-        return Pos(lineNum,
+        return new Pos(lineNum,
                    findFirstNonWhiteSpaceCharacter(cm.getLine(lineNum)));
       },
       textObjectManipulation: function(cm, head, motionArgs, vim) {
@@ -13207,7 +13361,7 @@
             if (anchor.line == cm.firstLine()) {
               anchor.ch = 0;
             } else {
-              anchor = Pos(anchor.line - 1, lineLength(cm, anchor.line - 1));
+              anchor = new Pos(anchor.line - 1, lineLength(cm, anchor.line - 1));
             }
           }
           text = cm.getRange(anchor, head);
@@ -13220,7 +13374,7 @@
           text = cm.getSelection();
           var replacement = fillArray('', ranges.length);
           cm.replaceSelections(replacement);
-          finalHead = ranges[0].anchor;
+          finalHead = cursorMin(ranges[0].head, ranges[0].anchor);
         }
         vimGlobalState.registerController.pushText(
             args.registerName, 'delete', text,
@@ -13354,7 +13508,7 @@
       },
       scrollToCursor: function(cm, actionArgs) {
         var lineNum = cm.getCursor().line;
-        var charCoords = cm.charCoords(Pos(lineNum, 0), 'local');
+        var charCoords = cm.charCoords(new Pos(lineNum, 0), 'local');
         var height = cm.getScrollInfo().clientHeight;
         var y = charCoords.top;
         var lineHeight = charCoords.bottom - y;
@@ -13406,9 +13560,9 @@
         var head = actionArgs.head || cm.getCursor('head');
         var height = cm.listSelections().length;
         if (insertAt == 'eol') {
-          head = Pos(head.line, lineLength(cm, head.line));
+          head = new Pos(head.line, lineLength(cm, head.line));
         } else if (insertAt == 'bol') {
-          head = Pos(head.line, 0);
+          head = new Pos(head.line, 0);
         } else if (insertAt == 'charAfter') {
           head = offsetCursor(head, 0, 1);
         } else if (insertAt == 'firstNonBlank') {
@@ -13420,10 +13574,10 @@
             if (sel.head.line < sel.anchor.line) {
               head = sel.head;
             } else {
-              head = Pos(sel.anchor.line, 0);
+              head = new Pos(sel.anchor.line, 0);
             }
           } else {
-            head = Pos(
+            head = new Pos(
                 Math.min(sel.head.line, sel.anchor.line),
                 Math.min(sel.head.ch, sel.anchor.ch));
             height = Math.abs(sel.head.line - sel.anchor.line) + 1;
@@ -13435,12 +13589,12 @@
             if (sel.head.line >= sel.anchor.line) {
               head = offsetCursor(sel.head, 0, 1);
             } else {
-              head = Pos(sel.anchor.line, 0);
+              head = new Pos(sel.anchor.line, 0);
             }
           } else {
-            head = Pos(
+            head = new Pos(
                 Math.min(sel.head.line, sel.anchor.line),
-                Math.max(sel.head.ch + 1, sel.anchor.ch));
+                Math.max(sel.head.ch, sel.anchor.ch) + 1);
             height = Math.abs(sel.head.line - sel.anchor.line) + 1;
           }
         } else if (insertAt == 'inplace') {
@@ -13484,7 +13638,7 @@
           vim.visualLine = !!actionArgs.linewise;
           vim.visualBlock = !!actionArgs.blockwise;
           head = clipCursorToContent(
-              cm, Pos(anchor.line, anchor.ch + repeat - 1));
+              cm, new Pos(anchor.line, anchor.ch + repeat - 1));
           vim.sel = {
             anchor: anchor,
             head: head
@@ -13547,13 +13701,13 @@
           // Repeat is the number of lines to join. Minimum 2 lines.
           var repeat = Math.max(actionArgs.repeat, 2);
           curStart = cm.getCursor();
-          curEnd = clipCursorToContent(cm, Pos(curStart.line + repeat - 1,
+          curEnd = clipCursorToContent(cm, new Pos(curStart.line + repeat - 1,
                                                Infinity));
         }
         var finalCh = 0;
         for (var i = curStart.line; i < curEnd.line; i++) {
           finalCh = lineLength(cm, curStart.line);
-          var tmp = Pos(curStart.line + 1,
+          var tmp = new Pos(curStart.line + 1,
                         lineLength(cm, curStart.line + 1));
           var text = cm.getRange(curStart, tmp);
           text = actionArgs.keepSpaces
@@ -13561,7 +13715,7 @@
             : text.replace(/\n\s*/g, ' ');
           cm.replaceRange(text, curStart, tmp);
         }
-        var curFinalPos = Pos(curStart.line, finalCh);
+        var curFinalPos = new Pos(curStart.line, finalCh);
         if (vim.visualMode) {
           exitVisualMode(cm, false);
         }
@@ -13572,7 +13726,7 @@
         var insertAt = copyCursor(cm.getCursor());
         if (insertAt.line === cm.firstLine() && !actionArgs.after) {
           // Special case for inserting newline before start of document.
-          cm.replaceRange('\n', Pos(cm.firstLine(), 0));
+          cm.replaceRange('\n', new Pos(cm.firstLine(), 0));
           cm.setCursor(cm.firstLine(), 0);
         } else {
           insertAt.line = (actionArgs.after) ? insertAt.line :
@@ -13673,7 +13827,7 @@
             // first delete the selected text
             cm.replaceSelections(emptyStrings);
             // Set new selections as per the block length of the yanked text
-            selectionEnd = Pos(selectionStart.line + text.length-1, selectionStart.ch);
+            selectionEnd = new Pos(selectionStart.line + text.length-1, selectionStart.ch);
             cm.setCursor(selectionStart);
             selectBlock(cm, selectionEnd);
             cm.replaceSelections(text);
@@ -13700,7 +13854,7 @@
             for (var i = 0; i < text.length; i++) {
               var line = cur.line+i;
               if (line > cm.lastLine()) {
-                cm.replaceRange('\n',  Pos(line, 0));
+                cm.replaceRange('\n',  new Pos(line, 0));
               }
               var lastCh = lineLength(cm, line);
               if (lastCh < cur.ch) {
@@ -13708,18 +13862,18 @@
               }
             }
             cm.setCursor(cur);
-            selectBlock(cm, Pos(cur.line + text.length-1, cur.ch));
+            selectBlock(cm, new Pos(cur.line + text.length-1, cur.ch));
             cm.replaceSelections(text);
             curPosFinal = cur;
           } else {
             cm.replaceRange(text, cur);
             // Now fine tune the cursor to where we want it.
             if (linewise && actionArgs.after) {
-              curPosFinal = Pos(
+              curPosFinal = new Pos(
               cur.line + 1,
               findFirstNonWhiteSpaceCharacter(cm.getLine(cur.line + 1)));
             } else if (linewise && !actionArgs.after) {
-              curPosFinal = Pos(
+              curPosFinal = new Pos(
                 cur.line,
                 findFirstNonWhiteSpaceCharacter(cm.getLine(cur.line)));
             } else if (!linewise && actionArgs.after) {
@@ -13767,7 +13921,7 @@
           if (replaceTo > line.length) {
             replaceTo=line.length;
           }
-          curEnd = Pos(curStart.line, replaceTo);
+          curEnd = new Pos(curStart.line, replaceTo);
         }
         if (replaceWith=='\n') {
           if (!vim.visualMode) cm.replaceRange('', curStart, curEnd);
@@ -13823,13 +13977,13 @@
           } else {
             numberStr = baseStr + zeroPadding + numberStr;
           }
-          var from = Pos(cur.line, start);
-          var to = Pos(cur.line, end);
+          var from = new Pos(cur.line, start);
+          var to = new Pos(cur.line, end);
           cm.replaceRange(numberStr, from, to);
         } else {
           return;
         }
-        cm.setCursor(Pos(cur.line, start + numberStr.length - 1));
+        cm.setCursor(new Pos(cur.line, start + numberStr.length - 1));
       },
       repeatLastEdit: function(cm, actionArgs, vim) {
         var lastEditInputState = vim.lastEditInputState;
@@ -13866,7 +14020,7 @@
       var line = Math.min(Math.max(cm.firstLine(), cur.line), cm.lastLine() );
       var maxCh = lineLength(cm, line) - 1 + !!includeLineBreak;
       var ch = Math.min(Math.max(0, cur.ch), maxCh);
-      return Pos(line, ch);
+      return new Pos(line, ch);
     }
     function copyArgs(args) {
       var ret = {};
@@ -13882,7 +14036,7 @@
         offsetCh = offsetLine.ch;
         offsetLine = offsetLine.line;
       }
-      return Pos(cur.line + offsetLine, cur.ch + offsetCh);
+      return new Pos(cur.line + offsetLine, cur.ch + offsetCh);
     }
     function commandMatches(keys, keyMap, context, inputState) {
       // Partial matches are not applied. They inform the key handler
@@ -13942,7 +14096,7 @@
       };
     }
     function copyCursor(cur) {
-      return Pos(cur.line, cur.ch);
+      return new Pos(cur.line, cur.ch);
     }
     function cursorEqual(cur1, cur2) {
       return cur1.ch == cur2.ch && cur1.line == cur2.line;
@@ -13989,7 +14143,7 @@
     function extendLineToColumn(cm, lineNum, column) {
       var endCh = lineLength(cm, lineNum);
       var spaces = new Array(column-endCh+1).join(' ');
-      cm.setCursor(Pos(lineNum, endCh));
+      cm.setCursor(new Pos(lineNum, endCh));
       cm.replaceRange(spaces, cm.getCursor());
     }
     // This functions selects a rectangular block
@@ -14070,13 +14224,13 @@
         if (block) {
           var width = block.width;
           var height = block.height;
-          selectionEnd = Pos(selectionStart.line + height, selectionStart.ch + width);
+          selectionEnd = new Pos(selectionStart.line + height, selectionStart.ch + width);
           var selections = [];
           // selectBlock creates a 'proper' rectangular block.
           // We do not want that in all cases, so we manually set selections.
           for (var i = selectionStart.line; i < selectionEnd.line; i++) {
-            var anchor = Pos(i, selectionStart.ch);
-            var head = Pos(i, selectionEnd.ch);
+            var anchor = new Pos(i, selectionStart.ch);
+            var head = new Pos(i, selectionEnd.ch);
             var range = {anchor: anchor, head: head};
             selections.push(range);
           }
@@ -14088,8 +14242,8 @@
           var ch = end.ch - start.ch;
           selectionEnd = {line: selectionEnd.line + line, ch: line ? selectionEnd.ch : ch + selectionEnd.ch};
           if (lastSelection.visualLine) {
-            selectionStart = Pos(selectionStart.line, 0);
-            selectionEnd = Pos(selectionEnd.line, lineLength(cm, selectionEnd.line));
+            selectionStart = new Pos(selectionStart.line, 0);
+            selectionEnd = new Pos(selectionEnd.line, lineLength(cm, selectionEnd.line));
           }
           cm.setSelection(selectionStart, selectionEnd);
         }
@@ -14138,7 +14292,7 @@
         head = cursorMax(head, end);
         head = offsetCursor(head, 0, -1);
         if (head.ch == -1 && head.line != cm.firstLine()) {
-          head = Pos(head.line - 1, lineLength(cm, head.line - 1));
+          head = new Pos(head.line - 1, lineLength(cm, head.line - 1));
         }
       }
       return [anchor, head];
@@ -14154,7 +14308,6 @@
         vim.visualLine ? 'line' : vim.visualBlock ? 'block' : 'char';
       var cmSel = makeCmSelection(cm, sel, mode);
       cm.setSelections(cmSel.ranges, cmSel.primary);
-      updateFakeCursor(cm);
     }
     function makeCmSelection(cm, sel, mode, exclusive) {
       var head = copyCursor(sel.head);
@@ -14187,16 +14340,18 @@
         };
       } else if (mode == 'block') {
         var top = Math.min(anchor.line, head.line),
-            left = Math.min(anchor.ch, head.ch),
+            fromCh = anchor.ch,
             bottom = Math.max(anchor.line, head.line),
-            right = Math.max(anchor.ch, head.ch) + 1;
+            toCh = head.ch;
+        if (fromCh < toCh) { toCh += 1 }
+        else { fromCh += 1 };
         var height = bottom - top + 1;
         var primary = head.line == top ? 0 : height - 1;
         var ranges = [];
         for (var i = 0; i < height; i++) {
           ranges.push({
-            anchor: Pos(top + i, left),
-            head: Pos(top + i, right)
+            anchor: new Pos(top + i, fromCh),
+            head: new Pos(top + i, toCh)
           });
         }
         return {
@@ -14230,7 +14385,6 @@
       vim.visualLine = false;
       vim.visualBlock = false;
       if (!vim.insertMode) CodeMirror.signal(cm, "vim-mode-change", {mode: "normal"});
-      clearFakeCursor(vim);
     }
 
     // Remove any trailing newlines from the selection. For
@@ -14318,7 +14472,7 @@
           if (!start) { start = wordStart; }
         }
       }
-      return { start: Pos(cur.line, start), end: Pos(cur.line, end) };
+      return { start: new Pos(cur.line, start), end: new Pos(cur.line, end) };
     }
 
     /**
@@ -14492,7 +14646,7 @@
         }
       }
       if (state.nextCh || state.curMoveThrough) {
-        return Pos(line, state.index);
+        return new Pos(line, state.index);
       }
       return cur;
     }
@@ -14604,7 +14758,7 @@
           break;
         }
         words.push(word);
-        cur = Pos(word.line, forward ? (word.to - 1) : word.from);
+        cur = new Pos(word.line, forward ? (word.to - 1) : word.from);
       }
       var shortCircuit = words.length != repeat;
       var firstWord = words[0];
@@ -14615,25 +14769,25 @@
           // We did not start in the middle of a word. Discard the extra word at the end.
           lastWord = words.pop();
         }
-        return Pos(lastWord.line, lastWord.from);
+        return new Pos(lastWord.line, lastWord.from);
       } else if (forward && wordEnd) {
-        return Pos(lastWord.line, lastWord.to - 1);
+        return new Pos(lastWord.line, lastWord.to - 1);
       } else if (!forward && wordEnd) {
         // ge
         if (!shortCircuit && (firstWord.to != curStart.ch || firstWord.line != curStart.line)) {
           // We did not start in the middle of a word. Discard the extra word at the end.
           lastWord = words.pop();
         }
-        return Pos(lastWord.line, lastWord.to);
+        return new Pos(lastWord.line, lastWord.to);
       } else {
         // b
-        return Pos(lastWord.line, lastWord.from);
+        return new Pos(lastWord.line, lastWord.from);
       }
     }
 
     function moveToEol(cm, head, motionArgs, vim, keepHPos) {
       var cur = head;
-      var retval= Pos(cur.line + motionArgs.repeat - 1, Infinity);
+      var retval= new Pos(cur.line + motionArgs.repeat - 1, Infinity);
       var end=cm.clipPos(retval);
       end.ch--;
       if (!keepHPos) {
@@ -14655,14 +14809,14 @@
         }
         start = idx;
       }
-      return Pos(cm.getCursor().line, idx);
+      return new Pos(cm.getCursor().line, idx);
     }
 
     function moveToColumn(cm, repeat) {
       // repeat is always >= 1, so repeat - 1 always corresponds
       // to the column we want to go to.
       var line = cm.getCursor().line;
-      return clipCursorToContent(cm, Pos(line, repeat - 1));
+      return clipCursorToContent(cm, new Pos(line, repeat - 1));
     }
 
     function updateMark(cm, vim, markName, pos) {
@@ -14914,7 +15068,7 @@
         repeat--;
       }
 
-      return Pos(curr_index.ln, curr_index.pos);
+      return new Pos(curr_index.ln, curr_index.pos);
     }
 
     // TODO: perhaps this finagling of start and end positions belongs
@@ -14937,8 +15091,8 @@
       // cursor is on a matching open bracket.
       var offset = curChar === openSym ? 1 : 0;
 
-      start = cm.scanForBracket(Pos(cur.line, cur.ch + offset), -1, undefined, {'bracketRegex': bracketRegexp});
-      end = cm.scanForBracket(Pos(cur.line, cur.ch + offset), 1, undefined, {'bracketRegex': bracketRegexp});
+      start = cm.scanForBracket(new Pos(cur.line, cur.ch + offset), -1, undefined, {'bracketRegex': bracketRegexp});
+      end = cm.scanForBracket(new Pos(cur.line, cur.ch + offset), 1, undefined, {'bracketRegex': bracketRegexp});
 
       if (!start || !end) {
         return { start: cur, end: cur };
@@ -15019,8 +15173,8 @@
       }
 
       return {
-        start: Pos(cur.line, start),
-        end: Pos(cur.line, end)
+        start: new Pos(cur.line, start),
+        end: new Pos(cur.line, end)
       };
     }
 
@@ -15240,7 +15394,7 @@
         ignoreCase = (/^[^A-Z]*$/).test(regexPart);
       }
       var regexp = new RegExp(regexPart,
-          (ignoreCase || forceIgnoreCase) ? 'i' : undefined);
+          (ignoreCase || forceIgnoreCase) ? 'im' : 'm');
       return regexp;
     }
 
@@ -15270,7 +15424,7 @@
     }
 
     function showConfirm(cm, template) {
-      var pre = dom('pre', {$color: 'red'}, template);
+      var pre = dom('pre', {$color: 'red', class: 'cm-vim-message'}, template);
       if (cm.openNotification) {
         cm.openNotification(pre, {bottom: true, duration: 5000});
       } else {
@@ -15288,7 +15442,6 @@
     }
 
     function showPrompt(cm, options) {
-      var shortText = (options.prefix || '') + ' ' + (options.desc || '');
       var template = makePrompt(options.prefix, options.desc);
       if (cm.openDialog) {
         cm.openDialog(template, options.onClose, {
@@ -15297,6 +15450,9 @@
         });
       }
       else {
+        var shortText = '';
+        if (typeof options.prefix != "string" && options.prefix) shortText += options.prefix.textContent;
+        if (options.desc) shortText += " " + options.desc;
         options.onClose(prompt(shortText, ''));
       }
     }
@@ -15371,6 +15527,7 @@
     function highlightSearchMatches(cm, query) {
       clearTimeout(highlightTimeout);
       highlightTimeout = setTimeout(function() {
+        if (!cm.state.vim) return;
         var searchState = getSearchState(cm);
         var overlay = searchState.getOverlay();
         if (!overlay || query != overlay.query) {
@@ -15396,12 +15553,19 @@
         var cursor = cm.getSearchCursor(query, pos);
         for (var i = 0; i < repeat; i++) {
           var found = cursor.find(prev);
-          if (i == 0 && found && cursorEqual(cursor.from(), pos)) { found = cursor.find(prev); }
+          if (i == 0 && found && cursorEqual(cursor.from(), pos)) {
+            var lastEndPos = prev ? cursor.from() : cursor.to();
+            found = cursor.find(prev);
+            if (found && !found[0] && cursorEqual(cursor.from(), lastEndPos)) {
+              if (cm.getLine(lastEndPos.line).length == lastEndPos.ch)
+                found = cursor.find(prev);
+            }
+          }
           if (!found) {
             // SearchCursor may have returned null because it hit EOF, wrap
             // around and try again.
             cursor = cm.getSearchCursor(query,
-                (prev) ? Pos(cm.lastLine()) : Pos(cm.firstLine(), 0) );
+                (prev) ? new Pos(cm.lastLine()) : new Pos(cm.firstLine(), 0) );
             if (!cursor.find(prev)) {
               return;
             }
@@ -15437,7 +15601,7 @@
             // SearchCursor may have returned null because it hit EOF, wrap
             // around and try again.
             cursor = cm.getSearchCursor(query,
-                (prev) ? Pos(cm.lastLine()) : Pos(cm.firstLine(), 0) );
+                (prev) ? new Pos(cm.lastLine()) : new Pos(cm.firstLine(), 0) );
             if (!cursor.find(prev)) {
               return;
             }
@@ -15493,7 +15657,7 @@
 
     function getMarkPos(cm, vim, markName) {
       if (markName == '\'' || markName == '`') {
-        return vimGlobalState.jumpList.find(cm, -1) || Pos(0, 0);
+        return vimGlobalState.jumpList.find(cm, -1) || new Pos(0, 0);
       } else if (markName == '.') {
         return getLastEditPos(cm);
       }
@@ -15558,7 +15722,7 @@
             if (command.type == 'exToKey') {
               // Handle Ex to Key mapping.
               for (var i = 0; i < command.toKeys.length; i++) {
-                CodeMirror.Vim.handleKey(cm, command.toKeys[i], 'mapping');
+                vimApi.handleKey(cm, command.toKeys[i], 'mapping');
               }
               return;
             } else if (command.type == 'exToEx') {
@@ -15733,7 +15897,7 @@
           var commandName = lhs.substring(1);
           if (this.commandMap_[commandName] && this.commandMap_[commandName].user) {
             delete this.commandMap_[commandName];
-            return;
+            return true;
           }
         } else {
           // Key to Ex or key to key mapping
@@ -15742,11 +15906,10 @@
             if (keys == defaultKeymap[i].keys
                 && defaultKeymap[i].context === ctx) {
               defaultKeymap.splice(i, 1);
-              return;
+              return true;
             }
           }
         }
-        throw Error('No such mapping.');
       }
     };
 
@@ -15773,13 +15936,11 @@
       vmap: function(cm, params) { this.map(cm, params, 'visual'); },
       unmap: function(cm, params, ctx) {
         var mapArgs = params.args;
-        if (!mapArgs || mapArgs.length < 1) {
+        if (!mapArgs || mapArgs.length < 1 || !exCommandDispatcher.unmap(mapArgs[0], ctx)) {
           if (cm) {
             showConfirm(cm, 'No such mapping: ' + params.input);
           }
-          return;
         }
-        exCommandDispatcher.unmap(mapArgs[0], ctx);
       },
       move: function(cm, params) {
         commandDispatcher.processCommand(cm, cm.state.vim, {
@@ -15907,8 +16068,8 @@
         var lineStart = params.line || cm.firstLine();
         var lineEnd = params.lineEnd || params.line || cm.lastLine();
         if (lineStart == lineEnd) { return; }
-        var curStart = Pos(lineStart, 0);
-        var curEnd = Pos(lineEnd, lineLength(cm, lineEnd));
+        var curStart = new Pos(lineStart, 0);
+        var curEnd = new Pos(lineEnd, lineLength(cm, lineEnd));
         var text = cm.getRange(curStart, curEnd).split('\n');
         var numberRegex = pattern ? pattern :
            (number == 'decimal') ? /(-?)([\d]+)/ :
@@ -16049,12 +16210,6 @@
               regexPart = new RegExp(regexPart).source; //normalize not escaped characters
           }
           replacePart = tokens[1];
-          // If the pattern ends with $ (line boundary assertion), change $ to \n.
-          // Caveat: this workaround cannot match on the last line of the document.
-          if (/(^|[^\\])(\\\\)*\$$/.test(regexPart)) {
-            regexPart = regexPart.slice(0, -1) + '\\n';
-            replacePart = (replacePart || '') + '\n';
-          }
           if (replacePart !== undefined) {
             if (getOption('pcre')) {
               replacePart = unescapeRegexReplace(replacePart.replace(/([^\\])&/g,"$1$$&"));
@@ -16120,7 +16275,7 @@
           lineStart = lineEnd;
           lineEnd = lineStart + count - 1;
         }
-        var startPos = clipCursorToContent(cm, Pos(lineStart, 0));
+        var startPos = clipCursorToContent(cm, new Pos(lineStart, 0));
         var cursor = cm.getSearchCursor(query, startPos);
         doReplace(cm, confirm, global, lineStart, lineEnd, cursor, query, replacePart, params.callback);
       },
@@ -16244,10 +16399,18 @@
         lineEnd += modifiedLineNumber - unmodifiedLineNumber;
         joined = modifiedLineNumber < unmodifiedLineNumber;
       }
+      function findNextValidMatch() {
+        var lastMatchTo = lastPos && copyCursor(searchCursor.to());
+        var match = searchCursor.findNext();
+        if (match && !match[0] && lastMatchTo && cursorEqual(searchCursor.from(), lastMatchTo)) {
+          match = searchCursor.findNext();
+        }
+        return match;
+      }
       function next() {
         // The below only loops to skip over multiple occurrences on the same
         // line when 'global' is not true.
-        while(searchCursor.findNext() &&
+        while(findNextValidMatch() &&
               isInRange(searchCursor.from(), lineStart, lineEnd)) {
           if (!global && searchCursor.from().line == modifiedLineNumber && !joined) {
             continue;
@@ -16412,7 +16575,7 @@
           match = (/<\w+-.+?>|<\w+>|./).exec(text);
           key = match[0];
           text = text.substring(match.index + key.length);
-          CodeMirror.Vim.handleKey(cm, key, 'macro');
+          vimApi.handleKey(cm, key, 'macro');
           if (vim.insertMode) {
             var changes = register.insertModeChanges[imc++].changes;
             vimGlobalState.macroModeState.lastInsertModeChanges.changes =
@@ -16506,36 +16669,6 @@
         }
       } else if (!cm.curOp.isVimOp) {
         handleExternalSelection(cm, vim);
-      }
-      if (vim.visualMode) {
-        updateFakeCursor(cm);
-      }
-    }
-    /**
-     * Keeps track of a fake cursor to support visual mode cursor behavior.
-     */
-    function updateFakeCursor(cm) {
-      var className = 'cm-animate-fat-cursor';
-      var vim = cm.state.vim;
-      var from = clipCursorToContent(cm, copyCursor(vim.sel.head));
-      var to = offsetCursor(from, 0, 1);
-      clearFakeCursor(vim);
-      // In visual mode, the cursor may be positioned over EOL.
-      if (from.ch == cm.getLine(from.line).length) {
-        var widget = dom('span', { 'class': className }, '\u00a0');
-        vim.fakeCursorBookmark = cm.setBookmark(from, {widget: widget});
-      } else {
-        vim.fakeCursor = cm.markText(from, to, {className: className});
-      }
-    }
-    function clearFakeCursor(vim) {
-      if (vim.fakeCursor) {
-        vim.fakeCursor.clear();
-        vim.fakeCursor = null;
-      }
-      if (vim.fakeCursorBookmark) {
-        vim.fakeCursorBookmark.clear();
-        vim.fakeCursorBookmark = null;
       }
     }
     function handleExternalSelection(cm, vim) {
@@ -16678,12 +16811,12 @@
           if (change instanceof InsertModeKey) {
             CodeMirror.lookupKey(change.keyName, 'vim-insert', keyHandler);
           } else if (typeof change == "string") {
-            var cur = cm.getCursor();
-            cm.replaceRange(change, cur, cur);
+            cm.replaceSelection(change);
           } else {
             var start = cm.getCursor();
             var end = offsetCursor(start, 0, change[0].length);
             cm.replaceRange(change[0], start, end);
+            cm.setCursor(end);
           }
         }
       }
@@ -16763,7 +16896,7 @@
       var identifiers = parserConf.identifiers|| /^[_A-Za-z\u00A1-\uFFFF][_A-Za-z0-9\u00A1-\uFFFF]*/;
       myKeywords = myKeywords.concat(["nonlocal", "False", "True", "None", "async", "await"]);
       myBuiltins = myBuiltins.concat(["ascii", "bytes", "exec", "print"]);
-      var stringPrefixes = new RegExp("^(([rbuf]|(br)|(fr))?('{3}|\"{3}|['\"]))", "i");
+      var stringPrefixes = new RegExp("^(([rbuf]|(br)|(rb)|(fr)|(rf))?('{3}|\"{3}|['\"]))", "i");
     } else {
       var identifiers = parserConf.identifiers|| /^[_A-Za-z][_A-Za-z0-9]*/;
       myKeywords = myKeywords.concat(["exec", "print"]);
@@ -16983,7 +17116,7 @@
     }
 
     function pushBracketScope(stream, state, type) {
-      var align = stream.match(/^([\s\[\{\(]|#.*)*$/, false) ? null : stream.column() + 1
+      var align = stream.match(/^[\s\[\{\(]*(?:#|$)/, false) ? null : stream.column() + 1
       state.scopes.push({offset: state.indent + hangingIndent,
                          type: type,
                          align: align})
@@ -16999,7 +17132,10 @@
     }
 
     function tokenLexer(stream, state) {
-      if (stream.sol()) state.beginningOfLine = true;
+      if (stream.sol()) {
+        state.beginningOfLine = true;
+        state.dedent = false;
+      }
 
       var style = state.tokenize(stream, state);
       var current = stream.current();
@@ -17016,10 +17152,10 @@
 
       // Handle scope changes.
       if (current == "pass" || current == "return")
-        state.dedent += 1;
+        state.dedent = true;
 
       if (current == "lambda") state.lambda = true;
-      if (current == ":" && !state.lambda && top(state).type == "py")
+      if (current == ":" && !state.lambda && top(state).type == "py" && stream.match(/^\s*(?:#|$)/, false))
         pushPyScope(state);
 
       if (current.length == 1 && !/string|comment/.test(style)) {
@@ -17033,10 +17169,8 @@
           else return ERRORCLASS;
         }
       }
-      if (state.dedent > 0 && stream.eol() && top(state).type == "py") {
-        if (state.scopes.length > 1) state.scopes.pop();
-        state.dedent -= 1;
-      }
+      if (state.dedent && stream.eol() && top(state).type == "py" && state.scopes.length > 1)
+        state.scopes.pop();
 
       return style;
     }
@@ -17071,14 +17205,16 @@
         if (state.tokenize != tokenBase)
           return state.tokenize.isString ? CodeMirror.Pass : 0;
 
-        var scope = top(state), closing = scope.type == textAfter.charAt(0)
+        var scope = top(state)
+        var closing = scope.type == textAfter.charAt(0) ||
+            scope.type == "py" && !state.dedent && /^(else:|elif |except |finally:)/.test(textAfter)
         if (scope.align != null)
           return scope.align - (closing ? 1 : 0)
         else
           return scope.offset - (closing ? hangingIndent : 0)
       },
 
-      electricInput: /^\s*[\}\]\)]$/,
+      electricInput: /^\s*([\}\]\)]|else:|elif |except |finally:)$/,
       closeBrackets: {triples: "'\""},
       lineComment: "#",
       fold: "indent"
@@ -17117,6 +17253,7 @@ CodeMirror.defineMode("javascript", function(config, parserConfig) {
   var statementIndent = parserConfig.statementIndent;
   var jsonldMode = parserConfig.jsonld;
   var jsonMode = parserConfig.json || jsonldMode;
+  var trackScope = parserConfig.trackScope !== false
   var isTS = parserConfig.typescript;
   var wordRE = parserConfig.wordCharacters || /[\w$\xa1-\uffff]/;
 
@@ -17319,7 +17456,8 @@ CodeMirror.defineMode("javascript", function(config, parserConfig) {
 
   // Parser
 
-  var atomicTypes = {"atom": true, "number": true, "variable": true, "string": true, "regexp": true, "this": true, "jsonld-keyword": true};
+  var atomicTypes = {"atom": true, "number": true, "variable": true, "string": true,
+                     "regexp": true, "this": true, "import": true, "jsonld-keyword": true};
 
   function JSLexical(indented, column, type, align, prev, info) {
     this.indented = indented;
@@ -17331,6 +17469,7 @@ CodeMirror.defineMode("javascript", function(config, parserConfig) {
   }
 
   function inScope(state, varname) {
+    if (!trackScope) return false
     for (var v = state.localVars; v; v = v.next)
       if (v.name == varname) return true;
     for (var cx = state.context; cx; cx = cx.prev) {
@@ -17377,6 +17516,7 @@ CodeMirror.defineMode("javascript", function(config, parserConfig) {
   function register(varname) {
     var state = cx.state;
     cx.marked = "def";
+    if (!trackScope) return
     if (state.context) {
       if (state.lexical.info == "var" && state.context && state.context.block) {
         // FIXME function decls are also not block scoped
@@ -17476,7 +17616,7 @@ CodeMirror.defineMode("javascript", function(config, parserConfig) {
       return cont(pushlex("form"), parenExpr, statement, poplex, maybeelse);
     }
     if (type == "function") return cont(functiondef);
-    if (type == "for") return cont(pushlex("form"), forspec, statement, poplex);
+    if (type == "for") return cont(pushlex("form"), pushblockcontext, forspec, statement, popcontext, poplex);
     if (type == "class" || (isTS && value == "interface")) {
       cx.marked = "keyword"
       return cont(pushlex("form", type == "class" ? type : value), className, poplex)
@@ -17542,7 +17682,6 @@ CodeMirror.defineMode("javascript", function(config, parserConfig) {
     if (type == "{") return contCommasep(objprop, "}", null, maybeop);
     if (type == "quasi") return pass(quasi, maybeop);
     if (type == "new") return cont(maybeTarget(noComma));
-    if (type == "import") return cont(expression);
     return cont();
   }
   function maybeexpression(type) {
@@ -17580,7 +17719,7 @@ CodeMirror.defineMode("javascript", function(config, parserConfig) {
   function quasi(type, value) {
     if (type != "quasi") return pass();
     if (value.slice(value.length - 2) != "${") return cont(quasi);
-    return cont(expression, continueQuasi);
+    return cont(maybeexpression, continueQuasi);
   }
   function continueQuasi(type) {
     if (type == "}") {
@@ -17706,7 +17845,7 @@ CodeMirror.defineMode("javascript", function(config, parserConfig) {
     }
   }
   function typeexpr(type, value) {
-    if (value == "keyof" || value == "typeof" || value == "infer") {
+    if (value == "keyof" || value == "typeof" || value == "infer" || value == "readonly") {
       cx.marked = "keyword"
       return cont(value == "typeof" ? expressionNoComma : typeexpr)
     }
@@ -17720,6 +17859,7 @@ CodeMirror.defineMode("javascript", function(config, parserConfig) {
     if (type == "{") return cont(pushlex("}"), typeprops, poplex, afterType)
     if (type == "(") return cont(commasep(typearg, ")"), maybeReturnType, afterType)
     if (type == "<") return cont(commasep(typeexpr, ">"), typeexpr)
+    if (type == "quasi") { return pass(quasiType, afterType); }
   }
   function maybeReturnType(type) {
     if (type == "=>") return cont(typeexpr)
@@ -17743,6 +17883,18 @@ CodeMirror.defineMode("javascript", function(config, parserConfig) {
       return pass(functiondecl, typeprop)
     } else if (!type.match(/[;\}\)\],]/)) {
       return cont()
+    }
+  }
+  function quasiType(type, value) {
+    if (type != "quasi") return pass();
+    if (value.slice(value.length - 2) != "${") return cont(quasiType);
+    return cont(typeexpr, continueQuasiType);
+  }
+  function continueQuasiType(type) {
+    if (type == "}") {
+      cx.marked = "string-2";
+      cx.state.tokenize = tokenQuasi;
+      return cont(quasiType);
     }
   }
   function typearg(type, value) {
@@ -17884,6 +18036,7 @@ CodeMirror.defineMode("javascript", function(config, parserConfig) {
     if (value == "@") return cont(expression, classBody)
   }
   function classfield(type, value) {
+    if (value == "!") return cont(classfield)
     if (value == "?") return cont(classfield)
     if (type == ":") return cont(typeexpr, maybeAssign)
     if (value == "=") return cont(expressionNoComma)
@@ -17903,6 +18056,7 @@ CodeMirror.defineMode("javascript", function(config, parserConfig) {
   function afterImport(type) {
     if (type == "string") return cont();
     if (type == "(") return pass(expression);
+    if (type == ".") return pass(maybeoperatorComma);
     return pass(importSpec, maybeMoreImports, maybeFrom);
   }
   function importSpec(type, value) {
@@ -17983,7 +18137,7 @@ CodeMirror.defineMode("javascript", function(config, parserConfig) {
       if (!/^\s*else\b/.test(textAfter)) for (var i = state.cc.length - 1; i >= 0; --i) {
         var c = state.cc[i];
         if (c == poplex) lexical = lexical.prev;
-        else if (c != maybeelse) break;
+        else if (c != maybeelse && c != popcontext) break;
       }
       while ((lexical.type == "stat" || lexical.type == "form") &&
              (firstChar == "}" || ((top = state.cc[state.cc.length - 1]) &&
@@ -18020,8 +18174,7 @@ CodeMirror.defineMode("javascript", function(config, parserConfig) {
     expressionAllowed: expressionAllowed,
 
     skipExpression: function(state) {
-      var top = state.cc[state.cc.length - 1]
-      if (top == expression || top == expressionNoComma) state.cc.pop()
+      parseJS(state, "atom", "atom", "true", new CodeMirror.StringStream("", 2, null))
     }
   };
 });
@@ -18487,13 +18640,15 @@ CodeMirror.defineMode("css", function(config, parserConfig) {
     "monochrome", "min-monochrome", "max-monochrome", "resolution",
     "min-resolution", "max-resolution", "scan", "grid", "orientation",
     "device-pixel-ratio", "min-device-pixel-ratio", "max-device-pixel-ratio",
-    "pointer", "any-pointer", "hover", "any-hover", "prefers-color-scheme"
+    "pointer", "any-pointer", "hover", "any-hover", "prefers-color-scheme",
+    "dynamic-range", "video-dynamic-range"
   ], mediaFeatures = keySet(mediaFeatures_);
 
   var mediaValueKeywords_ = [
     "landscape", "portrait", "none", "coarse", "fine", "on-demand", "hover",
     "interlace", "progressive",
-    "dark", "light"
+    "dark", "light",
+    "standard", "high"
   ], mediaValueKeywords = keySet(mediaValueKeywords_);
 
   var propertyKeywords_ = [
@@ -18526,7 +18681,7 @@ CodeMirror.defineMode("css", function(config, parserConfig) {
     "cue-before", "cursor", "direction", "display", "dominant-baseline",
     "drop-initial-after-adjust", "drop-initial-after-align",
     "drop-initial-before-adjust", "drop-initial-before-align", "drop-initial-size",
-    "drop-initial-value", "elevation", "empty-cells", "fit", "fit-position",
+    "drop-initial-value", "elevation", "empty-cells", "fit", "fit-content", "fit-position",
     "flex", "flex-basis", "flex-direction", "flex-flow", "flex-grow",
     "flex-shrink", "flex-wrap", "float", "float-offset", "flow-from", "flow-into",
     "font", "font-family", "font-feature-settings", "font-kerning",
@@ -18608,7 +18763,7 @@ CodeMirror.defineMode("css", function(config, parserConfig) {
   ], propertyKeywords = keySet(propertyKeywords_);
 
   var nonStandardPropertyKeywords_ = [
-    "border-block", "border-block-color", "border-block-end",
+    "accent-color", "aspect-ratio", "border-block", "border-block-color", "border-block-end",
     "border-block-end-color", "border-block-end-style", "border-block-end-width",
     "border-block-start", "border-block-start-color", "border-block-start-style",
     "border-block-start-width", "border-block-style", "border-block-width",
@@ -18616,9 +18771,9 @@ CodeMirror.defineMode("css", function(config, parserConfig) {
     "border-inline-end-color", "border-inline-end-style",
     "border-inline-end-width", "border-inline-start", "border-inline-start-color",
     "border-inline-start-style", "border-inline-start-width",
-    "border-inline-style", "border-inline-width", "margin-block",
+    "border-inline-style", "border-inline-width", "content-visibility", "margin-block",
     "margin-block-end", "margin-block-start", "margin-inline", "margin-inline-end",
-    "margin-inline-start", "padding-block", "padding-block-end",
+    "margin-inline-start", "overflow-anchor", "overscroll-behavior", "padding-block", "padding-block-end",
     "padding-block-start", "padding-inline", "padding-inline-end",
     "padding-inline-start", "scroll-snap-stop", "scrollbar-3d-light-color",
     "scrollbar-arrow-color", "scrollbar-base-color", "scrollbar-dark-shadow-color",
@@ -18642,16 +18797,16 @@ CodeMirror.defineMode("css", function(config, parserConfig) {
     "bisque", "black", "blanchedalmond", "blue", "blueviolet", "brown",
     "burlywood", "cadetblue", "chartreuse", "chocolate", "coral", "cornflowerblue",
     "cornsilk", "crimson", "cyan", "darkblue", "darkcyan", "darkgoldenrod",
-    "darkgray", "darkgreen", "darkkhaki", "darkmagenta", "darkolivegreen",
+    "darkgray", "darkgreen", "darkgrey", "darkkhaki", "darkmagenta", "darkolivegreen",
     "darkorange", "darkorchid", "darkred", "darksalmon", "darkseagreen",
-    "darkslateblue", "darkslategray", "darkturquoise", "darkviolet",
-    "deeppink", "deepskyblue", "dimgray", "dodgerblue", "firebrick",
+    "darkslateblue", "darkslategray", "darkslategrey", "darkturquoise", "darkviolet",
+    "deeppink", "deepskyblue", "dimgray", "dimgrey", "dodgerblue", "firebrick",
     "floralwhite", "forestgreen", "fuchsia", "gainsboro", "ghostwhite",
     "gold", "goldenrod", "gray", "grey", "green", "greenyellow", "honeydew",
     "hotpink", "indianred", "indigo", "ivory", "khaki", "lavender",
     "lavenderblush", "lawngreen", "lemonchiffon", "lightblue", "lightcoral",
-    "lightcyan", "lightgoldenrodyellow", "lightgray", "lightgreen", "lightpink",
-    "lightsalmon", "lightseagreen", "lightskyblue", "lightslategray",
+    "lightcyan", "lightgoldenrodyellow", "lightgray", "lightgreen", "lightgrey", "lightpink",
+    "lightsalmon", "lightseagreen", "lightskyblue", "lightslategray", "lightslategrey",
     "lightsteelblue", "lightyellow", "lime", "limegreen", "linen", "magenta",
     "maroon", "mediumaquamarine", "mediumblue", "mediumorchid", "mediumpurple",
     "mediumseagreen", "mediumslateblue", "mediumspringgreen", "mediumturquoise",
@@ -18661,7 +18816,7 @@ CodeMirror.defineMode("css", function(config, parserConfig) {
     "papayawhip", "peachpuff", "peru", "pink", "plum", "powderblue",
     "purple", "rebeccapurple", "red", "rosybrown", "royalblue", "saddlebrown",
     "salmon", "sandybrown", "seagreen", "seashell", "sienna", "silver", "skyblue",
-    "slateblue", "slategray", "snow", "springgreen", "steelblue", "tan",
+    "slateblue", "slategray", "slategrey", "snow", "springgreen", "steelblue", "tan",
     "teal", "thistle", "tomato", "turquoise", "violet", "wheat", "white",
     "whitesmoke", "yellow", "yellowgreen"
   ], colorKeywords = keySet(colorKeywords_);
@@ -18672,21 +18827,21 @@ CodeMirror.defineMode("css", function(config, parserConfig) {
     "always", "amharic", "amharic-abegede", "antialiased", "appworkspace",
     "arabic-indic", "armenian", "asterisks", "attr", "auto", "auto-flow", "avoid", "avoid-column", "avoid-page",
     "avoid-region", "axis-pan", "background", "backwards", "baseline", "below", "bidi-override", "binary",
-    "bengali", "blink", "block", "block-axis", "bold", "bolder", "border", "border-box",
-    "both", "bottom", "break", "break-all", "break-word", "bullets", "button", "button-bevel",
+    "bengali", "blink", "block", "block-axis", "blur", "bold", "bolder", "border", "border-box",
+    "both", "bottom", "break", "break-all", "break-word", "brightness", "bullets", "button", "button-bevel",
     "buttonface", "buttonhighlight", "buttonshadow", "buttontext", "calc", "cambodian",
     "capitalize", "caps-lock-indicator", "caption", "captiontext", "caret",
     "cell", "center", "checkbox", "circle", "cjk-decimal", "cjk-earthly-branch",
     "cjk-heavenly-stem", "cjk-ideographic", "clear", "clip", "close-quote",
     "col-resize", "collapse", "color", "color-burn", "color-dodge", "column", "column-reverse",
     "compact", "condensed", "contain", "content", "contents",
-    "content-box", "context-menu", "continuous", "copy", "counter", "counters", "cover", "crop",
-    "cross", "crosshair", "currentcolor", "cursive", "cyclic", "darken", "dashed", "decimal",
+    "content-box", "context-menu", "continuous", "contrast", "copy", "counter", "counters", "cover", "crop",
+    "cross", "crosshair", "cubic-bezier", "currentcolor", "cursive", "cyclic", "darken", "dashed", "decimal",
     "decimal-leading-zero", "default", "default-button", "dense", "destination-atop",
     "destination-in", "destination-out", "destination-over", "devanagari", "difference",
     "disc", "discard", "disclosure-closed", "disclosure-open", "document",
     "dot-dash", "dot-dot-dash",
-    "dotted", "double", "down", "e-resize", "ease", "ease-in", "ease-in-out", "ease-out",
+    "dotted", "double", "down", "drop-shadow", "e-resize", "ease", "ease-in", "ease-in-out", "ease-out",
     "element", "ellipse", "ellipsis", "embed", "end", "ethiopic", "ethiopic-abegede",
     "ethiopic-abegede-am-et", "ethiopic-abegede-gez", "ethiopic-abegede-ti-er",
     "ethiopic-abegede-ti-et", "ethiopic-halehame-aa-er",
@@ -18696,10 +18851,10 @@ CodeMirror.defineMode("css", function(config, parserConfig) {
     "ethiopic-halehame-ti-er", "ethiopic-halehame-ti-et", "ethiopic-halehame-tig",
     "ethiopic-numeric", "ew-resize", "exclusion", "expanded", "extends", "extra-condensed",
     "extra-expanded", "fantasy", "fast", "fill", "fill-box", "fixed", "flat", "flex", "flex-end", "flex-start", "footnotes",
-    "forwards", "from", "geometricPrecision", "georgian", "graytext", "grid", "groove",
+    "forwards", "from", "geometricPrecision", "georgian", "grayscale", "graytext", "grid", "groove",
     "gujarati", "gurmukhi", "hand", "hangul", "hangul-consonant", "hard-light", "hebrew",
     "help", "hidden", "hide", "higher", "highlight", "highlighttext",
-    "hiragana", "hiragana-iroha", "horizontal", "hsl", "hsla", "hue", "icon", "ignore",
+    "hiragana", "hiragana-iroha", "horizontal", "hsl", "hsla", "hue", "hue-rotate", "icon", "ignore",
     "inactiveborder", "inactivecaption", "inactivecaptiontext", "infinite",
     "infobackground", "infotext", "inherit", "initial", "inline", "inline-axis",
     "inline-block", "inline-flex", "inline-grid", "inline-table", "inset", "inside", "intrinsic", "invert",
@@ -18733,11 +18888,11 @@ CodeMirror.defineMode("css", function(config, parserConfig) {
     "repeating-radial-gradient", "repeat-x", "repeat-y", "reset", "reverse",
     "rgb", "rgba", "ridge", "right", "rotate", "rotate3d", "rotateX", "rotateY",
     "rotateZ", "round", "row", "row-resize", "row-reverse", "rtl", "run-in", "running",
-    "s-resize", "sans-serif", "saturation", "scale", "scale3d", "scaleX", "scaleY", "scaleZ", "screen",
+    "s-resize", "sans-serif", "saturate", "saturation", "scale", "scale3d", "scaleX", "scaleY", "scaleZ", "screen",
     "scroll", "scrollbar", "scroll-position", "se-resize", "searchfield",
     "searchfield-cancel-button", "searchfield-decoration",
     "searchfield-results-button", "searchfield-results-decoration", "self-start", "self-end",
-    "semi-condensed", "semi-expanded", "separate", "serif", "show", "sidama",
+    "semi-condensed", "semi-expanded", "separate", "sepia", "serif", "show", "sidama",
     "simp-chinese-formal", "simp-chinese-informal", "single",
     "skew", "skewX", "skewY", "skip-white-space", "slide", "slider-horizontal",
     "slider-vertical", "sliderthumb-horizontal", "sliderthumb-vertical", "slow",
@@ -19096,6 +19251,10 @@ CodeMirror.defineMode("xml", function(editorConf, config_) {
     };
   }
 
+  function lower(tagName) {
+    return tagName && tagName.toLowerCase();
+  }
+
   function Context(state, tagName, startOfLine) {
     this.prev = state.context;
     this.tagName = tagName || "";
@@ -19114,8 +19273,8 @@ CodeMirror.defineMode("xml", function(editorConf, config_) {
         return;
       }
       parentTagName = state.context.tagName;
-      if (!config.contextGrabbers.hasOwnProperty(parentTagName) ||
-          !config.contextGrabbers[parentTagName].hasOwnProperty(nextTagName)) {
+      if (!config.contextGrabbers.hasOwnProperty(lower(parentTagName)) ||
+          !config.contextGrabbers[lower(parentTagName)].hasOwnProperty(lower(nextTagName))) {
         return;
       }
       popContext(state);
@@ -19149,7 +19308,7 @@ CodeMirror.defineMode("xml", function(editorConf, config_) {
     if (type == "word") {
       var tagName = stream.current();
       if (state.context && state.context.tagName != tagName &&
-          config.implicitlyClosed.hasOwnProperty(state.context.tagName))
+          config.implicitlyClosed.hasOwnProperty(lower(state.context.tagName)))
         popContext(state);
       if ((state.context && state.context.tagName == tagName) || config.matchClosing === false) {
         setStyle = "tag";
@@ -19188,7 +19347,7 @@ CodeMirror.defineMode("xml", function(editorConf, config_) {
       var tagName = state.tagName, tagStart = state.tagStart;
       state.tagName = state.tagStart = null;
       if (type == "selfcloseTag" ||
-          config.autoSelfClosers.hasOwnProperty(tagName)) {
+          config.autoSelfClosers.hasOwnProperty(lower(tagName))) {
         maybePopContext(state, tagName);
       } else {
         maybePopContext(state, tagName);
@@ -19268,7 +19427,7 @@ CodeMirror.defineMode("xml", function(editorConf, config_) {
           if (context.tagName == tagAfter[2]) {
             context = context.prev;
             break;
-          } else if (config.implicitlyClosed.hasOwnProperty(context.tagName)) {
+          } else if (config.implicitlyClosed.hasOwnProperty(lower(context.tagName))) {
             context = context.prev;
           } else {
             break;
@@ -19276,8 +19435,8 @@ CodeMirror.defineMode("xml", function(editorConf, config_) {
         }
       } else if (tagAfter) { // Opening tag spotted
         while (context) {
-          var grabbers = config.contextGrabbers[context.tagName];
-          if (grabbers && grabbers.hasOwnProperty(tagAfter[2]))
+          var grabbers = config.contextGrabbers[lower(context.tagName)];
+          if (grabbers && grabbers.hasOwnProperty(lower(tagAfter[2])))
             context = context.prev;
           else
             break;
@@ -20158,18 +20317,43 @@ if (!CodeMirror.mimeModes.hasOwnProperty("text/html"))
     if (state.annotate) { state.annotate.clear(); state.annotate = null; }
   });}
 
+  function el(tag, attrs) {
+    var element = tag ? document.createElement(tag) : document.createDocumentFragment();
+    for (var key in attrs) {
+      element[key] = attrs[key];
+    }
+    for (var i = 2; i < arguments.length; i++) {
+      var child = arguments[i]
+      element.appendChild(typeof child == "string" ? document.createTextNode(child) : child);
+    }
+    return element;
+  }
 
   function getQueryDialog(cm)  {
-    return '<span class="CodeMirror-search-label">' + cm.phrase("Search:") + '</span> <input type="text" style="width: 10em" class="CodeMirror-search-field"/> <span style="color: #888" class="CodeMirror-search-hint">' + cm.phrase("(Use /re/ syntax for regexp search)") + '</span>';
+    return el("", null,
+              el("span", {className: "CodeMirror-search-label"}, cm.phrase("Search:")), " ",
+              el("input", {type: "text", "style": "width: 10em", className: "CodeMirror-search-field"}), " ",
+              el("span", {style: "color: #888", className: "CodeMirror-search-hint"},
+                 cm.phrase("(Use /re/ syntax for regexp search)")));
   }
   function getReplaceQueryDialog(cm) {
-    return ' <input type="text" style="width: 10em" class="CodeMirror-search-field"/> <span style="color: #888" class="CodeMirror-search-hint">' + cm.phrase("(Use /re/ syntax for regexp search)") + '</span>';
+    return el("", null, " ",
+              el("input", {type: "text", "style": "width: 10em", className: "CodeMirror-search-field"}), " ",
+              el("span", {style: "color: #888", className: "CodeMirror-search-hint"},
+                 cm.phrase("(Use /re/ syntax for regexp search)")));
   }
   function getReplacementQueryDialog(cm) {
-    return '<span class="CodeMirror-search-label">' + cm.phrase("With:") + '</span> <input type="text" style="width: 10em" class="CodeMirror-search-field"/>';
+    return el("", null,
+              el("span", {className: "CodeMirror-search-label"}, cm.phrase("With:")), " ",
+              el("input", {type: "text", "style": "width: 10em", className: "CodeMirror-search-field"}));
   }
   function getDoReplaceConfirm(cm) {
-    return '<span class="CodeMirror-search-label">' + cm.phrase("Replace?") + '</span> <button>' + cm.phrase("Yes") + '</button> <button>' + cm.phrase("No") + '</button> <button>' + cm.phrase("All") + '</button> <button>' + cm.phrase("Stop") + '</button> ';
+    return el("", null,
+              el("span", {className: "CodeMirror-search-label"}, cm.phrase("Replace?")), " ",
+              el("button", {}, cm.phrase("Yes")), " ",
+              el("button", {}, cm.phrase("No")), " ",
+              el("button", {}, cm.phrase("All")), " ",
+              el("button", {}, cm.phrase("Stop")));
   }
 
   function replaceAll(cm, query, text) {
@@ -20186,8 +20370,11 @@ if (!CodeMirror.mimeModes.hasOwnProperty("text/html"))
   function replace(cm, all) {
     if (cm.getOption("readOnly")) return;
     var query = cm.getSelection() || getSearchState(cm).lastQuery;
-    var dialogText = '<span class="CodeMirror-search-label">' + (all ? cm.phrase("Replace all:") : cm.phrase("Replace:")) + '</span>';
-    dialog(cm, dialogText + getReplaceQueryDialog(cm), dialogText, query, function(query) {
+    var dialogText = all ? cm.phrase("Replace all:") : cm.phrase("Replace:")
+    var fragment = el("", null,
+                      el("span", {className: "CodeMirror-search-label"}, dialogText),
+                      getReplaceQueryDialog(cm))
+    dialog(cm, fragment, dialogText, query, function(query) {
       if (!query) return;
       query = parseQuery(query);
       dialog(cm, getReplacementQueryDialog(cm), cm.phrase("Replace with:"), "", function(text) {
@@ -20436,6 +20623,7 @@ if (!CodeMirror.mimeModes.hasOwnProperty("text/html"))
 
   function SearchCursor(doc, query, pos, options) {
     this.atOccurrence = false
+    this.afterEmptyMatch = false
     this.doc = doc
     pos = pos ? doc.clipPos(pos) : Pos(0, 0)
     this.pos = {from: pos, to: pos}
@@ -20471,21 +20659,29 @@ if (!CodeMirror.mimeModes.hasOwnProperty("text/html"))
     findPrevious: function() {return this.find(true)},
 
     find: function(reverse) {
-      var result = this.matches(reverse, this.doc.clipPos(reverse ? this.pos.from : this.pos.to))
-
-      // Implements weird auto-growing behavior on null-matches for
-      // backwards-compatibility with the vim code (unfortunately)
-      while (result && CodeMirror.cmpPos(result.from, result.to) == 0) {
+      var head = this.doc.clipPos(reverse ? this.pos.from : this.pos.to);
+      if (this.afterEmptyMatch && this.atOccurrence) {
+        // do not return the same 0 width match twice
+        head = Pos(head.line, head.ch)
         if (reverse) {
-          if (result.from.ch) result.from = Pos(result.from.line, result.from.ch - 1)
-          else if (result.from.line == this.doc.firstLine()) result = null
-          else result = this.matches(reverse, this.doc.clipPos(Pos(result.from.line - 1)))
+          head.ch--;
+          if (head.ch < 0) {
+            head.line--;
+            head.ch = (this.doc.getLine(head.line) || "").length;
+          }
         } else {
-          if (result.to.ch < this.doc.getLine(result.to.line).length) result.to = Pos(result.to.line, result.to.ch + 1)
-          else if (result.to.line == this.doc.lastLine()) result = null
-          else result = this.matches(reverse, Pos(result.to.line + 1, 0))
+          head.ch++;
+          if (head.ch > (this.doc.getLine(head.line) || "").length) {
+            head.ch = 0;
+            head.line++;
+          }
+        }
+        if (CodeMirror.cmpPos(head, this.doc.clipPos(head)) != 0) {
+           return this.atOccurrence = false
         }
       }
+      var result = this.matches(reverse, head)
+      this.afterEmptyMatch = result && CodeMirror.cmpPos(result.from, result.to) == 0
 
       if (result) {
         this.pos = result
@@ -21075,6 +21271,7 @@ if (!CodeMirror.mimeModes.hasOwnProperty("text/html"))
   }
 
   function Widget(completion, data) {
+    this.id = "cm-complete-" + Math.floor(Math.random(1e6))
     this.completion = completion;
     this.data = data;
     this.picked = false;
@@ -21083,6 +21280,9 @@ if (!CodeMirror.mimeModes.hasOwnProperty("text/html"))
     var parentWindow = ownerDocument.defaultView || ownerDocument.parentWindow;
 
     var hints = this.hints = ownerDocument.createElement("ul");
+    hints.setAttribute("role", "listbox")
+    hints.setAttribute("aria-expanded", "true")
+    hints.id = this.id
     var theme = completion.cm.options.theme;
     hints.className = "CodeMirror-hints " + theme;
     this.selectedHint = data.selectedHint || 0;
@@ -21093,6 +21293,9 @@ if (!CodeMirror.mimeModes.hasOwnProperty("text/html"))
       var className = HINT_ELEMENT_CLASS + (i != this.selectedHint ? "" : " " + ACTIVE_HINT_ELEMENT_CLASS);
       if (cur.className != null) className = cur.className + " " + className;
       elt.className = className;
+      if (i == this.selectedHint) elt.setAttribute("aria-selected", "true")
+      elt.id = this.id + "-" + i
+      elt.setAttribute("role", "option")
       if (cur.render) cur.render(elt, data, cur);
       else elt.appendChild(ownerDocument.createTextNode(cur.displayText || getText(cur)));
       elt.hintId = i;
@@ -21118,6 +21321,9 @@ if (!CodeMirror.mimeModes.hasOwnProperty("text/html"))
     var winW = parentWindow.innerWidth || Math.max(ownerDocument.body.offsetWidth, ownerDocument.documentElement.offsetWidth);
     var winH = parentWindow.innerHeight || Math.max(ownerDocument.body.offsetHeight, ownerDocument.documentElement.offsetHeight);
     container.appendChild(hints);
+    cm.getInputField().setAttribute("aria-autocomplete", "list")
+    cm.getInputField().setAttribute("aria-owns", this.id)
+    cm.getInputField().setAttribute("aria-activedescendant", this.id + "-" + this.selectedHint)
 
     var box = completion.options.moveOnOverlap ? hints.getBoundingClientRect() : new DOMRect();
     var scrolls = completion.options.paddingForScrollbar ? hints.scrollHeight > hints.clientHeight + 1 : false;
@@ -21144,6 +21350,7 @@ if (!CodeMirror.mimeModes.hasOwnProperty("text/html"))
       }
     }
     var overlapX = box.right - winW;
+    if (scrolls) overlapX += cm.display.nativeBarWidth;
     if (overlapX > 0) {
       if (box.right - box.left > winW) {
         hints.style.width = (winW - 5) + "px";
@@ -21172,6 +21379,7 @@ if (!CodeMirror.mimeModes.hasOwnProperty("text/html"))
 
     cm.on("scroll", this.onScroll = function() {
       var curScroll = cm.getScrollInfo(), editor = cm.getWrapperElement().getBoundingClientRect();
+      if (!startScroll) startScroll = cm.getScrollInfo();
       var newTop = top + startScroll.top - curScroll.top;
       var point = newTop - (parentWindow.pageYOffset || (ownerDocument.documentElement || ownerDocument.body).scrollTop);
       if (!below) point += hints.offsetHeight;
@@ -21211,8 +21419,11 @@ if (!CodeMirror.mimeModes.hasOwnProperty("text/html"))
     close: function() {
       if (this.completion.widget != this) return;
       this.completion.widget = null;
-      this.hints.parentNode.removeChild(this.hints);
+      if (this.hints.parentNode) this.hints.parentNode.removeChild(this.hints);
       this.completion.cm.removeKeyMap(this.keyMap);
+      var input = this.completion.cm.getInputField()
+      input.removeAttribute("aria-activedescendant")
+      input.removeAttribute("aria-owns")
 
       var cm = this.completion.cm;
       if (this.completion.options.closeOnUnfocus) {
@@ -21240,9 +21451,14 @@ if (!CodeMirror.mimeModes.hasOwnProperty("text/html"))
         i = avoidWrap ? 0  : this.data.list.length - 1;
       if (this.selectedHint == i) return;
       var node = this.hints.childNodes[this.selectedHint];
-      if (node) node.className = node.className.replace(" " + ACTIVE_HINT_ELEMENT_CLASS, "");
+      if (node) {
+        node.className = node.className.replace(" " + ACTIVE_HINT_ELEMENT_CLASS, "");
+        node.removeAttribute("aria-selected")
+      }
       node = this.hints.childNodes[this.selectedHint = i];
       node.className += " " + ACTIVE_HINT_ELEMENT_CLASS;
+      node.setAttribute("aria-selected", "true")
+      this.completion.cm.getInputField().setAttribute("aria-activedescendant", node.id)
       this.scrollToActive()
       CodeMirror.signal(this.data, "select", this.data.list[this.selectedHint], node);
     },
@@ -21870,6 +22086,7 @@ if (!CodeMirror.mimeModes.hasOwnProperty("text/html"))
 })(function(CodeMirror) {
   "use strict";
   var GUTTER_ID = "CodeMirror-lint-markers";
+  var LINT_LINE_ID = "CodeMirror-lint-line-";
 
   function showTooltip(cm, e, content) {
     var tt = document.createElement("div");
@@ -21917,27 +22134,52 @@ if (!CodeMirror.mimeModes.hasOwnProperty("text/html"))
     CodeMirror.on(node, "mouseout", hide);
   }
 
-  function LintState(cm, options, hasGutter) {
+  function LintState(cm, conf, hasGutter) {
     this.marked = [];
-    this.options = options;
+    if (conf instanceof Function) conf = {getAnnotations: conf};
+    if (!conf || conf === true) conf = {};
+    this.options = {};
+    this.linterOptions = conf.options || {};
+    for (var prop in defaults) this.options[prop] = defaults[prop];
+    for (var prop in conf) {
+      if (defaults.hasOwnProperty(prop)) {
+        if (conf[prop] != null) this.options[prop] = conf[prop];
+      } else if (!conf.options) {
+        this.linterOptions[prop] = conf[prop];
+      }
+    }
     this.timeout = null;
     this.hasGutter = hasGutter;
     this.onMouseOver = function(e) { onMouseOver(cm, e); };
     this.waitingFor = 0
   }
 
-  function parseOptions(_cm, options) {
-    if (options instanceof Function) return {getAnnotations: options};
-    if (!options || options === true) options = {};
-    return options;
+  var defaults = {
+    highlightLines: false,
+    tooltips: true,
+    delay: 500,
+    lintOnChange: true,
+    getAnnotations: null,
+    async: false,
+    selfContain: null,
+    formatAnnotation: null,
+    onUpdateLinting: null
   }
 
   function clearMarks(cm) {
     var state = cm.state.lint;
     if (state.hasGutter) cm.clearGutter(GUTTER_ID);
+    if (state.options.highlightLines) clearErrorLines(cm);
     for (var i = 0; i < state.marked.length; ++i)
       state.marked[i].clear();
     state.marked.length = 0;
+  }
+
+  function clearErrorLines(cm) {
+    cm.eachLine(function(line) {
+      var has = line.wrapClass && /\bCodeMirror-lint-line-\w+\b/.exec(line.wrapClass);
+      if (has) cm.removeLineClass(line, "wrap", has[0]);
+    })
   }
 
   function makeMarker(cm, labels, severity, multiple, tooltips) {
@@ -21982,7 +22224,7 @@ if (!CodeMirror.mimeModes.hasOwnProperty("text/html"))
     return tip;
   }
 
-  function lintAsync(cm, getAnnotations, passOptions) {
+  function lintAsync(cm, getAnnotations) {
     var state = cm.state.lint
     var id = ++state.waitingFor
     function abort() {
@@ -21995,22 +22237,23 @@ if (!CodeMirror.mimeModes.hasOwnProperty("text/html"))
       if (state.waitingFor != id) return
       if (arg2 && annotations instanceof CodeMirror) annotations = arg2
       cm.operation(function() {updateLinting(cm, annotations)})
-    }, passOptions, cm);
+    }, state.linterOptions, cm);
   }
 
   function startLinting(cm) {
-    var state = cm.state.lint, options = state.options;
+    var state = cm.state.lint;
+    if (!state) return;
+    var options = state.options;
     /*
      * Passing rules in `options` property prevents JSHint (and other linters) from complaining
      * about unrecognized rules like `onUpdateLinting`, `delay`, `lintOnChange`, etc.
      */
-    var passOptions = options.options || options;
     var getAnnotations = options.getAnnotations || cm.getHelper(CodeMirror.Pos(0, 0), "lint");
     if (!getAnnotations) return;
     if (options.async || getAnnotations.async) {
-      lintAsync(cm, getAnnotations, passOptions)
+      lintAsync(cm, getAnnotations)
     } else {
-      var annotations = getAnnotations(cm.getValue(), passOptions, cm);
+      var annotations = getAnnotations(cm.getValue(), state.linterOptions, cm);
       if (!annotations) return;
       if (annotations.then) annotations.then(function(issues) {
         cm.operation(function() {updateLinting(cm, issues)})
@@ -22020,8 +22263,10 @@ if (!CodeMirror.mimeModes.hasOwnProperty("text/html"))
   }
 
   function updateLinting(cm, annotationsNotSorted) {
+    var state = cm.state.lint;
+    if (!state) return;
+    var options = state.options;
     clearMarks(cm);
-    var state = cm.state.lint, options = state.options;
 
     var annotations = groupByLine(annotationsNotSorted);
 
@@ -22053,7 +22298,10 @@ if (!CodeMirror.mimeModes.hasOwnProperty("text/html"))
       // use original annotations[line] to show multiple messages
       if (state.hasGutter)
         cm.setGutterMarker(line, GUTTER_ID, makeMarker(cm, tipLabel, maxSeverity, annotations[line].length > 1,
-                                                       state.options.tooltips));
+                                                       options.tooltips));
+
+      if (options.highlightLines)
+        cm.addLineClass(line, "wrap", LINT_LINE_ID + maxSeverity);
     }
     if (options.onUpdateLinting) options.onUpdateLinting(annotationsNotSorted, annotations, cm);
   }
@@ -22062,7 +22310,7 @@ if (!CodeMirror.mimeModes.hasOwnProperty("text/html"))
     var state = cm.state.lint;
     if (!state) return;
     clearTimeout(state.timeout);
-    state.timeout = setTimeout(function(){startLinting(cm);}, state.options.delay || 500);
+    state.timeout = setTimeout(function(){startLinting(cm);}, state.options.delay);
   }
 
   function popupTooltips(cm, annotations, e) {
@@ -22102,8 +22350,8 @@ if (!CodeMirror.mimeModes.hasOwnProperty("text/html"))
     if (val) {
       var gutters = cm.getOption("gutters"), hasLintGutter = false;
       for (var i = 0; i < gutters.length; ++i) if (gutters[i] == GUTTER_ID) hasLintGutter = true;
-      var state = cm.state.lint = new LintState(cm, parseOptions(cm, val), hasLintGutter);
-      if (state.options.lintOnChange !== false)
+      var state = cm.state.lint = new LintState(cm, val, hasLintGutter);
+      if (state.options.lintOnChange)
         cm.on("change", onChange);
       if (state.options.tooltips != false && state.options.tooltips != "gutter")
         CodeMirror.on(cm.getWrapperElement(), "mouseover", state.onMouseOver);
@@ -22113,7 +22361,7 @@ if (!CodeMirror.mimeModes.hasOwnProperty("text/html"))
   });
 
   CodeMirror.defineExtension("performLint", function() {
-    if (this.state.lint) startLinting(this);
+    startLinting(this);
   });
 });
 
@@ -22416,8 +22664,7 @@ if (!CodeMirror.mimeModes.hasOwnProperty("text/html"))
         var content = ts.options.completionTip ? ts.options.completionTip(cur.data) : cur.data.doc;
         if (content) {
           tooltip = makeTooltip(node.parentNode.getBoundingClientRect().right + window.pageXOffset,
-                                node.getBoundingClientRect().top + window.pageYOffset, content, cm);
-          tooltip.className += " " + cls + "hint-doc";
+                                node.getBoundingClientRect().top + window.pageYOffset, content, cm, cls + "hint-doc");
         }
       });
       c(obj);
@@ -22822,12 +23069,44 @@ if (!CodeMirror.mimeModes.hasOwnProperty("text/html"))
     }
   }
 
-  function makeTooltip(x, y, content, cm) {
-    var node = elt("div", cls + "tooltip", content);
+  function makeTooltip(x, y, content, cm, className) {
+    var node = elt("div", cls + "tooltip" + " " + (className || ""), content);
     node.style.left = x + "px";
     node.style.top = y + "px";
     var container = ((cm.options || {}).hintOptions || {}).container || document.body;
     container.appendChild(node);
+
+    var pos = cm.cursorCoords();
+    var winW = window.innerWidth;
+    var winH = window.innerHeight;
+    var box = node.getBoundingClientRect();
+    var hints = document.querySelector(".CodeMirror-hints");
+    var overlapY = box.bottom - winH;
+    var overlapX = box.right - winW;
+
+    if (hints && overlapX > 0) {
+      node.style.left = 0;
+      var box = node.getBoundingClientRect();
+      node.style.left = (x = x - hints.offsetWidth - box.width) + "px";
+      overlapX = box.right - winW;
+    }
+    if (overlapY > 0) {
+      var height = box.bottom - box.top, curTop = pos.top - (pos.bottom - box.top);
+      if (curTop - height > 0) { // Fits above cursor
+        node.style.top = (pos.top - height) + "px";
+      } else if (height > winH) {
+        node.style.height = (winH - 5) + "px";
+        node.style.top = (pos.bottom - box.top) + "px";
+      }
+    }
+    if (overlapX > 0) {
+      if (box.right - box.left > winW) {
+        node.style.width = (winW - 5) + "px";
+        overlapX -= (box.right - box.left) - winW;
+      }
+      node.style.left = (x - overlapX) + "px";
+    }
+
     return node;
   }
 
@@ -23013,7 +23292,7 @@ CodeMirror.runMode = function(string, modespec, callback, options) {
     if (!stream.string && mode.blankLine) mode.blankLine(state);
     while (!stream.eol()) {
       var style = mode.token(stream, state);
-      callback(stream.current(), style, i, stream.start, state);
+      callback(stream.current(), style, i, stream.start, state, mode);
       stream.start = stream.pos;
     }
   }

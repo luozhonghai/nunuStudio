@@ -61,6 +61,8 @@ function Asset(parent)
 	this.name = document.createTextNode("");
 	this.text.appendChild(this.name);
 
+	var self = this;
+
 	this.element.onmouseenter = function()
 	{
 		this.style.backgroundColor = "var(--button-over-color)";

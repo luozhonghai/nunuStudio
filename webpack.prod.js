@@ -6,7 +6,7 @@ const common = require("./webpack.config.js");
 
 const git = new GitRevisionPlugin();
 
-const output = Path.resolve(__dirname, "docs/editor");
+const output = Path.resolve(__dirname, "build/editor");
 
 module.exports = [
 	Merge(common[0], {
@@ -19,7 +19,7 @@ module.exports = [
 				"TIMESTAMP": JSON.stringify(new Date().toISOString()),
 				"REPOSITORY_BRANCH": JSON.stringify(git.branch()),
 				"REPOSITORY_COMMIT": JSON.stringify(git.commithash()),
-				"DEVELOPMENT": JSON.stringify(false)
+				"DEVELOPMENT": JSON.stringify(true)
 			})
 		],
 		output: {

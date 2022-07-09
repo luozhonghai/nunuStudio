@@ -6,7 +6,7 @@ const CopyPlugin = require("copy-webpack-plugin");
 
 
 const source = Path.resolve(__dirname, "source");
-const output = Path.resolve(__dirname, "docs/editor");
+const output = Path.resolve(__dirname, "build/editor");
 
 const Merge = require("webpack-merge");
 const runtime = require("./webpack.runtime.js");
