@@ -102,7 +102,7 @@ GeometryLoader.prototype.parse = function(data)
 	}
 	else if (data.format === "chunk")
 	{
-		var chunkData = JSON.parse(FileSystem.readFile(data.path, true));
+		var chunkData = JSON.parse(FileSystem.readFile(Editor.projectPath + "\\" + data.path, true));
 		geometry = this.parseChunk(chunkData);
 		return geometry;
 	}

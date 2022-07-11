@@ -66,6 +66,9 @@ Editor.initialize = function()
 	Editor.settings = new Settings();
 	Editor.settings.load();
 
+	// Project directory
+	Editor.projectPath = "";
+
 	// Register tern plugins
 	Editor.ternDefinitions = [];
 	Editor.ternDefinitions.push(JSON.parse(FileSystem.readFile(Global.FILE_PATH + "tern/threejs.json")));
@@ -224,11 +227,16 @@ Editor.initialize = function()
 			{
 				if (Editor.openFile === null)
 				{
-					Editor.gui.saveProgram();
+					//Editor.gui.saveProgram();
+					FileSystem.chooseDirectory().then(function(path)
+					{
+						Editor.saveProgramPath(path);
+					});
 				}
 				else
 				{
-					Editor.saveProgram(undefined, true);
+					//Editor.saveProgram(undefined, true);
+					Editor.saveProgramPath(Editor.projectPath);
 				}
 			}
 			else if (key === Keyboard.L)
@@ -974,11 +982,11 @@ Editor.saveProgramPath = function(path)
 			for (var j = 0; j < resources.length; j++)
 			{
 				var fname = path + "\\" + lib + "\\" + resources[j].uuid;
-
+				var relPath = lib + "\\" + resources[j].uuid;
 				data[lib].push({
 					uuid: resources[j].uuid,
 					format: "chunk",
-					path: fname
+					path: relPath
 				});
 
 				//FileSystem.writeFileArrayBuffer(fname, pson.toArrayBuffer(resources[j]));
@@ -990,7 +998,12 @@ Editor.saveProgramPath = function(path)
 
 	//FileSystem.writeFileArrayBuffer(path + "\\app.nsp", pson.toArrayBuffer(data));
 	var json = JSON.stringify(data, null, "\t");
-	FileSystem.writeFile(path + "\\app.isp", json);
+	console.log("path: " + path);
+	var fileName = FileSystem.getFolderName(path);
+	console.log("filename: " + fileName);
+	FileSystem.writeFile(path + "\\" + fileName + ".isp", json);
+
+	Editor.alert(Locale.projectSaved);
 };
 
 /**
@@ -1137,6 +1150,9 @@ Editor.loadProgram = function(file, binary)
 	{
 		var reader = new FileReader();
 		reader.onload = onload;
+
+		Editor.projectPath = FileSystem.getFilePath(file.path);
+		console.log("projectPath 1:  " + Editor.projectPath );
 		if (binary === true)
 		{
 			reader.readAsArrayBuffer(file);
@@ -1149,6 +1165,8 @@ Editor.loadProgram = function(file, binary)
 	else if (typeof file === "string")
 	{
 		var reader = {};
+		Editor.projectPath = FileSystem.getFilePath(file);
+		console.log("projectPath 2:  " + Editor.projectPath );
 		if (binary === true)
 		{
 			reader.result = FileSystem.readFileArrayBuffer(file);

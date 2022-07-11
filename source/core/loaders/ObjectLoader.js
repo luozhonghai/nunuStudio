@@ -43,6 +43,7 @@ import {TextureLoader} from "./TextureLoader.js";
 import {VideoLoader} from "./VideoLoader.js";
 import {BillboardGroup} from "../objects/misc/BillboardGroup";
 import {FileSystem} from "../FileSystem";
+import {Editor} from "../../editor/Editor";
 
 /**
  * Objectloader can be used to load external objects from files.
@@ -167,12 +168,24 @@ ObjectLoader.prototype.parseResources = function(json)
 	{
 		for (var i in json)
 		{
-			var resource = new TextFile(json[i].data, json[i].encoding);
-			resource.format = json[i].format;
-			resource.name = json[i].name;
-			resource.uuid = json[i].uuid;
+			if (json[i].format === "chunk")
+			{
+				var chunkData = JSON.parse(FileSystem.readFile(Editor.projectPath + "\\" + json[i].path, true));
+				var resource = new TextFile(chunkData.data, chunkData.encoding);
+				resource.format = chunkData.format;
+				resource.name = chunkData.name;
+				resource.uuid = chunkData.uuid;
+				this.resources[resource.uuid] = resource;
+			}
+			else
+			{
+				var resource = new TextFile(json[i].data, json[i].encoding);
+				resource.format = json[i].format;
+				resource.name = json[i].name;
+				resource.uuid = json[i].uuid;
 
-			this.resources[resource.uuid] = resource;
+				this.resources[resource.uuid] = resource;
+			}
 		}
 	}
 
@@ -192,8 +205,16 @@ ObjectLoader.prototype.parseShape = function(json)
 	{
 		for (var i = 0, l = json.length; i < l; i ++)
 		{
-			var shape = new Shape().fromJSON(json[i]);
-			this.shapes[shape.uuid] = shape;
+			if (json[i].format === "chunk")
+			{
+				var chunkData = JSON.parse(FileSystem.readFile(Editor.projectPath + "\\" + json[i].path, true));
+				this.shapes[json[i].uuid] = new Shape().fromJSON(chunkData);
+			}
+			else
+			{
+				var shape = new Shape().fromJSON(json[i]);
+				this.shapes[shape.uuid] = shape;
+			}
 		}
 	}
 
@@ -243,7 +264,7 @@ ObjectLoader.prototype.parseMaterials = function(json)
 			console.log("json[i].format: " + json[i].format);
 			if (json[i].format === "chunk")
 			{
-				var chunkData = JSON.parse(FileSystem.readFile(json[i].path, true));
+				var chunkData = JSON.parse(FileSystem.readFile(Editor.projectPath + "\\" + json[i].path, true));
 				this.materials[json[i].uuid] = loader.parse(chunkData);
 			}
 			else
@@ -271,7 +292,15 @@ ObjectLoader.prototype.parseImages = function(json)
 		var loader = new ImageLoader();
 		for (var i in json)
 		{
-			this.images[json[i].uuid] = loader.parse(json[i]);
+			if (json[i].format === "chunk")
+			{
+				var chunkData = JSON.parse(FileSystem.readFile(Editor.projectPath + "\\" + json[i].path, true));
+				this.images[json[i].uuid] = loader.parse(chunkData);
+			}
+			else
+			{
+				this.images[json[i].uuid] = loader.parse(json[i]);
+			}
 		}
 	}
 
@@ -292,7 +321,15 @@ ObjectLoader.prototype.parseVideos = function(json)
 		var loader = new VideoLoader();
 		for (var i in json)
 		{
-			this.videos[json[i].uuid] = loader.parse(json[i]);
+			if (json[i].format === "chunk")
+			{
+				var chunkData = JSON.parse(FileSystem.readFile(Editor.projectPath + "\\" + json[i].path, true));
+				this.videos[json[i].uuid] = loader.parse(chunkData);
+			}
+			else
+			{
+				this.videos[json[i].uuid] = loader.parse(json[i]);
+			}
 		}
 	}
 
@@ -313,7 +350,15 @@ ObjectLoader.prototype.parseAudio = function(json)
 		var loader = new AudioLoader();
 		for (var i in json)
 		{
-			this.audio[json[i].uuid] = loader.parse(json[i]);
+			if (json[i].format === "chunk")
+			{
+				var chunkData = JSON.parse(FileSystem.readFile(Editor.projectPath + "\\" + json[i].path, true));
+				this.audio[json[i].uuid] = loader.parse(chunkData);
+			}
+			else
+			{
+				this.audio[json[i].uuid] = loader.parse(json[i]);
+			}
 		}
 	}
 
@@ -334,7 +379,15 @@ ObjectLoader.prototype.parseFonts = function(json)
 		var loader = new FontLoader();
 		for (var i in json)
 		{
-			this.fonts[json[i].uuid] = loader.parse(json[i]);
+			if (json[i].format === "chunk")
+			{
+				var chunkData = JSON.parse(FileSystem.readFile(Editor.projectPath + "\\" + json[i].path, true));
+				this.fonts[json[i].uuid] = loader.parse(chunkData);
+			}
+			else
+			{
+				this.fonts[json[i].uuid] = loader.parse(json[i]);
+			}
 		}
 	}
 
@@ -358,7 +411,15 @@ ObjectLoader.prototype.parseTextures = function(json)
 
 		for (var i in json)
 		{
-			this.textures[json[i].uuid] = loader.parse(json[i]);
+			if (json[i].format === "chunk")
+			{
+				var chunkData = JSON.parse(FileSystem.readFile(Editor.projectPath + "\\" + json[i].path, true));
+				this.textures[json[i].uuid] = loader.parse(chunkData);
+			}
+			else
+			{
+				this.textures[json[i].uuid] = loader.parse(json[i]);
+			}
 		}
 	}
 
@@ -378,7 +439,15 @@ ObjectLoader.prototype.parseSkeletons = function(json, object)
 	{
 		for (var i = 0; i < json.length; i++)
 		{
-			this.skeletons[json[i].uuid] = Skeleton.fromJSON(json[i], object, this);
+			if (json[i].format === "chunk")
+			{
+				var chunkData = JSON.parse(FileSystem.readFile(Editor.projectPath + "\\" + json[i].path, true));
+				this.textures[json[i].uuid] = Skeleton.fromJSON(chunkData, object, this);
+			}
+			else
+			{
+				this.skeletons[json[i].uuid] = Skeleton.fromJSON(json[i], object, this);
+			}
 		}
 	}
 

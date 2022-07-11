@@ -71,7 +71,7 @@ function MainMenu(parent)
 		Editor.gui.newProgram();
 	}, Global.FILE_PATH + "icons/misc/new.png");
 
-	// Save project
+	//Save project
 	fileMenu.addOption(Locale.save, function()
 	{
 		if (Editor.openFile !== null)
@@ -85,10 +85,10 @@ function MainMenu(parent)
 	}, Global.FILE_PATH + "icons/misc/save.png");
 
 	// Save project
-	fileMenu.addOption(Locale.saveAs, function()
-	{
-		Editor.gui.saveProgram();
-	}, Global.FILE_PATH + "icons/misc/save.png").setAltText("CTRL+S");
+	// fileMenu.addOption(Locale.saveAs, function()
+	// {
+	// 	Editor.gui.saveProgram();
+	// }, Global.FILE_PATH + "icons/misc/save.png").setAltText("CTRL+S");
 
 	// Save project to folder
 	if (DEVELOPMENT)
@@ -225,7 +225,7 @@ function MainMenu(parent)
 					}
 				}, "", Editor.program.name);
 			}, Global.FILE_PATH + "icons/platform/linux.png");
-	
+
 
 			// Publish macos
 			publish.addOption("macOS", function()
@@ -276,7 +276,7 @@ function MainMenu(parent)
 			{
 				var file = files[0];
 				var binary = FileSystem.getFileExtension(file.name) !== "isp";
-				
+
 				var loader = new ObjectLoader();
 				var reader = new FileReader();
 
@@ -321,7 +321,7 @@ function MainMenu(parent)
 
 	// Export OBJ
 	exportMenu.addOption("OBJ", function()
-	{	
+	{
 		Exporters.exportOBJ(Editor.getScene());
 	}, Global.FILE_PATH + "icons/misc/scene.png");
 
@@ -333,7 +333,7 @@ function MainMenu(parent)
 
 	// Export GLB
 	exportMenu.addOption("GLB", function()
-	{	
+	{
 		Exporters.exportGLTF(Editor.getScene(), true);
 	}, Global.FILE_PATH + "icons/gltf.png");
 
@@ -381,7 +381,7 @@ function MainMenu(parent)
 
 	// Export Binary STL
 	exportMenu.addOption("STL (" + Locale.binary + ")", function()
-	{	
+	{
 		Exporters.exportSTL(Editor.program, true);
 	}, Global.FILE_PATH + "icons/misc/scene.png");
 
@@ -418,7 +418,7 @@ function MainMenu(parent)
 	{
 		Editor.copyObject();
 	}, Global.FILE_PATH + "icons/misc/copy.png");
-	
+
 	editMenu.addOption(Locale.cut, function()
 	{
 		Editor.cutObject();
@@ -456,7 +456,7 @@ function MainMenu(parent)
 		{
 			geometry = geometry.clone();
 		}
-		
+
 		geometry.applyMatrix4(object.matrixWorld);
 
 		return new BSP(geometry);
@@ -658,7 +658,7 @@ function MainMenu(parent)
 		var geometry = new Geometry();
 
 		for (var i = 0; i < Editor.selection.length; i++)
-		{	
+		{
 			var obj = Editor.selection[i];
 			if (obj.geometry !== undefined)
 			{
